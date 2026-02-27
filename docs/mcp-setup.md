@@ -15,7 +15,12 @@ This starts a stdio-based MCP server. Below is how to configure it in each tool.
 The plugin gives you slash commands (`/wu-send`, `/wu-search`, `/wu-chats`, etc.) on top of the MCP tools:
 
 ```bash
-claude plugin add https://github.com/ibrahimhajjaj/wu-cli/tree/main/claude-plugin
+# Clone and use --plugin-dir
+git clone https://github.com/ibrahimhajjaj/wu-cli.git
+claude --plugin-dir ./wu-cli/claude-plugin
+
+# Or from inside Claude Code
+/plugin install wu-whatsapp
 ```
 
 See the [plugin README](../claude-plugin/README.md) for details.
