@@ -127,7 +127,7 @@ The daemon auto-reconnects on connection drops, logs health every 5 minutes, and
 wu mcp
 ```
 
-Exposes WhatsApp as tools and resources for AI agents via the [Model Context Protocol](https://modelcontextprotocol.io). See [MCP tools and resources](#mcp-tools-and-resources) below.
+Exposes WhatsApp as tools and resources for AI agents via the [Model Context Protocol](https://modelcontextprotocol.io). See [MCP setup guide](docs/mcp-setup.md) for Claude Code, Cursor, Codex CLI, and Gemini CLI configuration.
 
 ### Configuration
 

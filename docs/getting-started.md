@@ -202,18 +202,7 @@ wu mcp
 
 This starts a stdio-based MCP server that exposes tools (send messages, search, list chats) and resources (chat histories, contacts, groups) to any MCP-compatible client.
 
-Add to your AI tool's MCP config:
-
-```json
-{
-  "mcpServers": {
-    "wu": {
-      "command": "wu",
-      "args": ["mcp"]
-    }
-  }
-}
-```
+For setup instructions with **Claude Code**, **Cursor**, **Codex CLI**, and **Gemini CLI**, see the [MCP setup guide](mcp-setup.md).
 
 ## File Locations
 
@@ -235,4 +224,5 @@ WU_HOME=/custom/path wu listen
 
 - Run `wu --help` or `wu <command> --help` for full command reference
 - See the [README](../README.md) for the complete command table and constraint reference
+- See the [MCP setup guide](mcp-setup.md) for connecting wu to AI tools
 - Check `wu-daemon.service` in the project root for systemd service setup
