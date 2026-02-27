@@ -1,0 +1,13 @@
+{
+  "name": "wu-whatsapp",
+  "version": "0.1.0",
+  "description": "WhatsApp integration for Claude Code — send messages, search chats, manage groups via wu-cli",
+  "author": {
+    "name": "Ibrahim Hajjaj"
+  },
+  "repository": "https://github.com/ibrahimhajjaj/wu-cli",
+  "license": "MIT",
+  "keywords": ["whatsapp", "messaging", "mcp"],
+  "commands": "./commands",
+  "mcpServers": "./.mcp.json"
+}
