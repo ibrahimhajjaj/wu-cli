@@ -7,16 +7,13 @@ const { version } = require("../../package.json");
 import type { WASocket } from "@whiskeysockets/baileys";
 import { createConnection, waitForConnection } from "../core/connection.js";
 import { startListener } from "../core/listener.js";
-import { acquireLock, releaseLock } from "../core/lock.js";
+import { isLocked, acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
 import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 
 export async function startMcpServer(): Promise<void> {
-  // Acquire lock — conflicts with daemon/listen
-  acquireLock();
-
   const config = loadConfig();
 
   const server = new McpServer({
@@ -26,6 +23,7 @@ export async function startMcpServer(): Promise<void> {
 
   let sock: WASocket | undefined;
   let flushCreds: (() => Promise<void>) | undefined;
+  let ownsConnection = false;
 
   const getSock = (): WASocket | undefined => sock;
 
@@ -33,21 +31,30 @@ export async function startMcpServer(): Promise<void> {
   registerTools(server, getSock, config);
   registerResources(server);
 
-  // Connect to WhatsApp
-  const conn = await createConnection({
-    onOpen: () => {
-      // stderr only — stdout is MCP protocol
-      process.stderr.write("wu-mcp: Connected to WhatsApp\n");
-    },
-  });
+  const { locked } = isLocked();
 
-  sock = conn.sock;
-  flushCreds = conn.flushCreds;
+  if (locked) {
+    // Daemon is running — serve read-only from SQLite, no connection
+    process.stderr.write("wu-mcp: Daemon is running, starting in read-only mode (queries only, no sending)\n");
+  } else {
+    // No daemon — acquire lock and connect
+    acquireLock();
+    ownsConnection = true;
 
-  await waitForConnection(sock);
+    const conn = await createConnection({
+      onOpen: () => {
+        process.stderr.write("wu-mcp: Connected to WhatsApp\n");
+      },
+    });
 
-  // Start listener for message collection
-  startListener(sock, { config });
+    sock = conn.sock;
+    flushCreds = conn.flushCreds;
+
+    await waitForConnection(sock);
+
+    // Start listener for message collection
+    startListener(sock, { config });
+  }
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -55,7 +62,7 @@ export async function startMcpServer(): Promise<void> {
     if (flushCreds) await flushCreds();
     if (sock) sock.end(undefined);
     closeDb();
-    releaseLock();
+    if (ownsConnection) releaseLock();
     process.exit(0);
   };
 

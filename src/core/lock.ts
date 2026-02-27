@@ -10,16 +10,23 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+export function isLocked(): { locked: boolean; pid?: number } {
+  if (!existsSync(LOCK_PATH)) return { locked: false };
+  const existingPid = parseInt(readFileSync(LOCK_PATH, "utf-8").trim(), 10);
+  if (!isNaN(existingPid) && isProcessAlive(existingPid)) {
+    return { locked: true, pid: existingPid };
+  }
+  // Stale lock — clean it up
+  unlinkSync(LOCK_PATH);
+  return { locked: false };
+}
+
 export function acquireLock(): void {
-  if (existsSync(LOCK_PATH)) {
-    const existingPid = parseInt(readFileSync(LOCK_PATH, "utf-8").trim(), 10);
-    if (!isNaN(existingPid) && isProcessAlive(existingPid)) {
-      throw new Error(
-        `Another wu process is running (PID ${existingPid}). Only one long-running connection is allowed at a time.`
-      );
-    }
-    // Stale lock file — remove it
-    unlinkSync(LOCK_PATH);
+  const { locked, pid } = isLocked();
+  if (locked) {
+    throw new Error(
+      `Another wu process is running (PID ${pid}). Stop it first:\n\n  kill ${pid} && rm ~/.wu/wu.lock`
+    );
   }
   writeFileSync(LOCK_PATH, String(process.pid), "utf-8");
 }
