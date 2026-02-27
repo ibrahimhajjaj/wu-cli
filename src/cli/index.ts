@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { ensureWuHome } from "../config/paths.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json");
 import { registerConfigCommand } from "./config.js";
 import { registerLoginCommand } from "./login.js";
 import { registerStatusCommand } from "./status.js";
@@ -21,7 +25,7 @@ const program = new Command();
 program
   .name("wu")
   .description("WhatsApp CLI — like gh is to GitHub, wu is to WhatsApp")
-  .version("0.1.0")
+  .version(version)
   .exitOverride();
 
 ensureWuHome();

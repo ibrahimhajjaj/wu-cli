@@ -1,5 +1,9 @@
+import { createRequire } from "node:module";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json");
 import type { WASocket } from "@whiskeysockets/baileys";
 import { createConnection, waitForConnection } from "../core/connection.js";
 import { startListener } from "../core/listener.js";
@@ -17,7 +21,7 @@ export async function startMcpServer(): Promise<void> {
 
   const server = new McpServer({
     name: "wu-cli",
-    version: "0.1.0",
+    version,
   });
 
   let sock: WASocket | undefined;

@@ -10,7 +10,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/cli/index.js",
     "dev": "tsx src/cli/index.ts",
     "test": "tsx --test tests/*.test.ts"
   },
