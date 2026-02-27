@@ -221,7 +221,7 @@ wu messages list 120363XXX@g.us --json --limit 1000
 
 When running `wu mcp`, the following are available to AI agents:
 
-**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_groups_create`, `wu_groups_leave`, `wu_messages_search`, `wu_chats_list`, `wu_messages_list`, `wu_contacts_list`, `wu_status`
+**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_messages_search`, `wu_messages_list`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 

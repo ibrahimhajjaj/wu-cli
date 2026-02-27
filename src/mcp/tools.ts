@@ -2,10 +2,16 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
+import { loadConfig, saveConfig } from "../config/schema.js";
+import { resolveConstraint } from "../core/constraints.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia } from "../core/media.js";
-import { createGroup, leaveGroup } from "../core/groups.js";
-import { listChats, listMessages, searchMessages, listContacts, getMessageCount } from "../core/store.js";
+import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode } from "../core/groups.js";
+import {
+  listChats, listMessages, searchMessages, searchChats,
+  listContacts, searchContacts, getGroupParticipants,
+  getMessageCount,
+} from "../core/store.js";
 
 function jsonResult(data: unknown) {
   return {
@@ -270,6 +276,231 @@ export function registerTools(
         messages_stored: getMessageCount(),
         timestamp: Date.now(),
       });
+    }
+  );
+
+  // --- wu_chats_search ---
+  server.tool(
+    "wu_chats_search",
+    "Search WhatsApp chats by name",
+    {
+      query: z.string().describe("Search query"),
+      limit: z.number().optional().default(100).describe("Max results"),
+    },
+    async (params) => {
+      const chats = searchChats(params.query, { limit: params.limit });
+      return jsonResult(
+        chats.map((c) => ({
+          jid: c.jid,
+          name: c.name,
+          type: c.type,
+          last_message_at: c.last_message_at,
+        }))
+      );
+    }
+  );
+
+  // --- wu_contacts_search ---
+  server.tool(
+    "wu_contacts_search",
+    "Search WhatsApp contacts by name or phone",
+    {
+      query: z.string().describe("Search query"),
+      limit: z.number().optional().default(100).describe("Max results"),
+    },
+    async (params) => {
+      const contacts = searchContacts(params.query, { limit: params.limit });
+      return jsonResult(
+        contacts.map((c) => ({
+          jid: c.jid,
+          phone: c.phone,
+          push_name: c.push_name,
+          saved_name: c.saved_name,
+        }))
+      );
+    }
+  );
+
+  // --- wu_groups_list ---
+  server.tool(
+    "wu_groups_list",
+    "List WhatsApp groups (cached from DB, or live from WhatsApp with live=true)",
+    {
+      live: z.boolean().optional().default(false).describe("Fetch live from WhatsApp instead of cache"),
+      limit: z.number().optional().default(100).describe("Max results"),
+    },
+    async (params) => {
+      if (params.live) {
+        const sock = getSock();
+        if (!sock) return errorResult("Not connected to WhatsApp");
+        try {
+          const groups = await fetchAllGroups(sock);
+          return jsonResult(
+            Object.values(groups).slice(0, params.limit).map((g: any) => ({
+              jid: g.id,
+              name: g.subject,
+              participant_count: g.participants?.length ?? 0,
+            }))
+          );
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+      const chats = listChats({ limit: params.limit });
+      return jsonResult(
+        chats
+          .filter((c) => c.type === "group")
+          .map((c) => ({
+            jid: c.jid,
+            name: c.name,
+            participant_count: c.participant_count,
+            last_message_at: c.last_message_at,
+          }))
+      );
+    }
+  );
+
+  // --- wu_groups_info ---
+  server.tool(
+    "wu_groups_info",
+    "Get group details and participants",
+    {
+      jid: z.string().describe("Group JID"),
+      live: z.boolean().optional().default(false).describe("Fetch live from WhatsApp"),
+    },
+    async (params) => {
+      if (params.live) {
+        const sock = getSock();
+        if (!sock) return errorResult("Not connected to WhatsApp");
+        try {
+          const meta = await fetchGroupMetadata(sock, params.jid);
+          return jsonResult(meta);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+      const participants = getGroupParticipants(params.jid);
+      const chats = listChats({ limit: 1000 });
+      const group = chats.find((c) => c.jid === params.jid);
+      return jsonResult({
+        jid: params.jid,
+        name: group?.name,
+        description: group?.description,
+        participant_count: group?.participant_count,
+        participants: participants.map((p) => ({
+          jid: p.participant_jid,
+          is_admin: !!p.is_admin,
+          is_super_admin: !!p.is_super_admin,
+        })),
+      });
+    }
+  );
+
+  // --- wu_groups_invite ---
+  server.tool(
+    "wu_groups_invite",
+    "Get group invite link",
+    {
+      jid: z.string().describe("Group JID"),
+    },
+    async (params) => {
+      const sock = getSock();
+      if (!sock) return errorResult("Not connected to WhatsApp");
+      try {
+        const code = await getInviteCode(sock, params.jid, config);
+        return jsonResult({ link: `https://chat.whatsapp.com/${code}` });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_constraints_list ---
+  server.tool(
+    "wu_constraints_list",
+    "List all constraints (what chats the agent can access and at what level)",
+    {},
+    async () => {
+      const cfg = loadConfig();
+      const defaultMode = cfg.constraints?.default ?? "none";
+      const chats = cfg.constraints?.chats ?? {};
+      return jsonResult({
+        default: defaultMode,
+        chats: Object.entries(chats).map(([jid, c]) => ({
+          jid,
+          mode: c.mode,
+        })),
+      });
+    }
+  );
+
+  // --- wu_constraints_set ---
+  server.tool(
+    "wu_constraints_set",
+    "Set a constraint for a chat (allow/block). Mode: full (read+write+manage), read (collect only), none (blocked)",
+    {
+      jid: z.string().describe("Chat JID or wildcard (e.g. *@g.us)"),
+      mode: z.enum(["full", "read", "none"]).describe("Constraint mode"),
+    },
+    async (params) => {
+      const cfg = loadConfig();
+      if (!cfg.constraints) {
+        cfg.constraints = { default: "none", chats: {} };
+      }
+      cfg.constraints.chats[params.jid] = { mode: params.mode };
+      saveConfig(cfg);
+      return jsonResult({ jid: params.jid, mode: params.mode });
+    }
+  );
+
+  // --- wu_constraints_remove ---
+  server.tool(
+    "wu_constraints_remove",
+    "Remove a per-chat constraint (falls back to default)",
+    {
+      jid: z.string().describe("Chat JID to remove constraint for"),
+    },
+    async (params) => {
+      const cfg = loadConfig();
+      if (cfg.constraints?.chats) {
+        delete cfg.constraints.chats[params.jid];
+        saveConfig(cfg);
+      }
+      return jsonResult({ removed: params.jid });
+    }
+  );
+
+  // --- wu_constraints_default ---
+  server.tool(
+    "wu_constraints_default",
+    "Get or set the default constraint mode",
+    {
+      mode: z.enum(["full", "read", "none"]).optional().describe("New default mode (omit to just read current)"),
+    },
+    async (params) => {
+      if (params.mode) {
+        const cfg = loadConfig();
+        if (!cfg.constraints) {
+          cfg.constraints = { default: params.mode, chats: {} };
+        } else {
+          cfg.constraints.default = params.mode;
+        }
+        saveConfig(cfg);
+        return jsonResult({ default: params.mode });
+      }
+      const cfg = loadConfig();
+      return jsonResult({ default: cfg.constraints?.default ?? "none" });
+    }
+  );
+
+  // --- wu_config_show ---
+  server.tool(
+    "wu_config_show",
+    "Show current wu configuration",
+    {},
+    async () => {
+      const cfg = loadConfig();
+      return jsonResult(cfg);
     }
   );
 }

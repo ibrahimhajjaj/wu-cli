@@ -98,14 +98,24 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | Tool | Description |
 |---|---|
 | `wu_messages_send` | Send a text or media message |
+| `wu_messages_search` | Search messages by text |
+| `wu_messages_list` | List messages in a chat |
 | `wu_react` | React to a message with an emoji |
 | `wu_media_download` | Download media from a message |
+| `wu_chats_list` | List all chats |
+| `wu_chats_search` | Search chats by name |
+| `wu_contacts_list` | List all contacts |
+| `wu_contacts_search` | Search contacts by name or phone |
+| `wu_groups_list` | List groups (cached or live) |
+| `wu_groups_info` | Group details and participants |
+| `wu_groups_invite` | Get group invite link |
 | `wu_groups_create` | Create a new group |
 | `wu_groups_leave` | Leave a group |
-| `wu_messages_search` | Search messages by text |
-| `wu_chats_list` | List all chats |
-| `wu_messages_list` | List messages in a chat |
-| `wu_contacts_list` | List all contacts |
+| `wu_constraints_list` | Show all constraints |
+| `wu_constraints_set` | Allow/block a chat |
+| `wu_constraints_remove` | Remove a per-chat constraint |
+| `wu_constraints_default` | Get/set default constraint mode |
+| `wu_config_show` | Show current configuration |
 | `wu_status` | Get connection status |
 
 ## Available Resources
