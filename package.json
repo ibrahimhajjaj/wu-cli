@@ -1,6 +1,6 @@
 {
   "name": "@ibrahimwithi/wu-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "WhatsApp CLI tool — like gh is to GitHub, wu is to WhatsApp",
   "bin": {
@@ -20,7 +20,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
-    "better-sqlite3": "^11.8.2",
+    "better-sqlite3": "^12.6.2",
     "commander": "^13.1.0",
     "pino": "^9.6.0",
     "qrcode-terminal": "^0.12.0",
