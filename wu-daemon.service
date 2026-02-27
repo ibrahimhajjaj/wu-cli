@@ -1,0 +1,15 @@
+[Unit]
+Description=wu-cli WhatsApp daemon
+After=network.target
+
+[Service]
+Type=simple
+User=wu
+ExecStart=/usr/local/bin/wu daemon
+Restart=on-failure
+RestartSec=10
+Environment=NODE_ENV=production
+Environment=WU_HOME=/home/wu/.wu
+
+[Install]
+WantedBy=multi-user.target
