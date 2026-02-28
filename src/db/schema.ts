@@ -11,6 +11,11 @@ CREATE TABLE IF NOT EXISTS messages (
     media_mime TEXT,
     media_path TEXT,
     media_size INTEGER,
+    media_direct_path TEXT,
+    media_key TEXT,
+    media_file_sha256 TEXT,
+    media_file_enc_sha256 TEXT,
+    media_file_length INTEGER,
     quoted_id TEXT,
     location_lat REAL,
     location_lon REAL,
@@ -25,6 +30,28 @@ CREATE INDEX IF NOT EXISTS idx_msg_chat_ts ON messages(chat_jid, timestamp);
 CREATE INDEX IF NOT EXISTS idx_msg_body ON messages(body) WHERE body IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_msg_sender ON messages(sender_jid, timestamp);
 CREATE INDEX IF NOT EXISTS idx_msg_type ON messages(type);
+
+-- FTS5 full-text search (external content, synced via triggers)
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    body,
+    content=messages,
+    content_rowid=rowid
+);
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages
+WHEN NEW.body IS NOT NULL BEGIN
+    INSERT INTO messages_fts(rowid, body) VALUES (NEW.rowid, NEW.body);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF body ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
+    INSERT INTO messages_fts(rowid, body)
+        SELECT NEW.rowid, NEW.body WHERE NEW.body IS NOT NULL;
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
+END;
 
 CREATE TABLE IF NOT EXISTS chats (
     jid TEXT PRIMARY KEY,

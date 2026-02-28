@@ -167,3 +167,43 @@ export function extractMediaInfo(
         : null,
   };
 }
+
+export interface MediaResumeMetadata {
+  directPath: string | null;
+  mediaKey: string | null;
+  fileSha256: string | null;
+  fileEncSha256: string | null;
+  fileLength: number | null;
+}
+
+function toBase64(val: Uint8Array | null | undefined): string | null {
+  if (!val) return null;
+  return Buffer.from(val).toString("base64");
+}
+
+export function extractMediaResumeMetadata(
+  content: WAMessageContent | undefined
+): MediaResumeMetadata | null {
+  if (!content) return null;
+
+  const mediaMsg =
+    content.imageMessage ||
+    content.videoMessage ||
+    content.audioMessage ||
+    content.documentMessage ||
+    content.stickerMessage;
+
+  if (!mediaMsg) return null;
+
+  return {
+    directPath: mediaMsg.directPath || null,
+    mediaKey: toBase64(mediaMsg.mediaKey as Uint8Array | null | undefined),
+    fileSha256: toBase64(mediaMsg.fileSha256 as Uint8Array | null | undefined),
+    fileEncSha256: toBase64(mediaMsg.fileEncSha256 as Uint8Array | null | undefined),
+    fileLength: typeof mediaMsg.fileLength === "number"
+      ? mediaMsg.fileLength
+      : typeof mediaMsg.fileLength === "object" && mediaMsg.fileLength != null
+        ? Number(mediaMsg.fileLength)
+        : null,
+  };
+}

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
 import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
-import { listMessages, searchMessages } from "../core/store.js";
+import { listMessages, searchMessages, type SearchResult } from "../core/store.js";
 import { loadConfig } from "../config/schema.js";
 import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
@@ -82,12 +82,24 @@ export function registerMessagesCommand(program: Command): void {
         }
 
         if (opts.json) {
-          outputResult(rows, { json: true });
+          outputResult(rows.map((r) => ({
+            id: r.id,
+            chat_jid: r.chat_jid,
+            sender_name: r.sender_name,
+            sender_jid: r.sender_jid,
+            body: r.body,
+            snippet: r.snippet,
+            type: r.type,
+            timestamp: r.timestamp,
+          })), { json: true });
         } else {
           for (const row of rows) {
             const ts = formatTimestamp(row.timestamp);
             const sender = row.sender_name || row.sender_jid || "me";
-            console.log(`[${ts}] [${row.chat_jid}] ${sender}: ${row.body}`);
+            const text = row.snippet
+              ? row.snippet.replace(/>>>/g, "").replace(/<<</g, "")
+              : row.body;
+            console.log(`[${ts}] [${row.chat_jid}] ${sender}: ${text}`);
           }
         }
       }

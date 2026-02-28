@@ -9,6 +9,7 @@ import {
   extractQuotedId,
   extractLocationData,
   extractMediaInfo,
+  extractMediaResumeMetadata,
 } from "./extract.js";
 import {
   upsertMessage,
@@ -102,6 +103,7 @@ function parsedToRow(
   content: ReturnType<typeof getMessageContent>
 ): Omit<MessageRow, "created_at"> {
   const loc = extractLocationData(content);
+  const mediaMeta = extractMediaResumeMetadata(content);
   return {
     id: parsed.id,
     chat_jid: parsed.chatJid,
@@ -112,6 +114,11 @@ function parsedToRow(
     media_mime: parsed.mediaMime,
     media_path: null,
     media_size: parsed.mediaSize,
+    media_direct_path: mediaMeta?.directPath || null,
+    media_key: mediaMeta?.mediaKey || null,
+    media_file_sha256: mediaMeta?.fileSha256 || null,
+    media_file_enc_sha256: mediaMeta?.fileEncSha256 || null,
+    media_file_length: mediaMeta?.fileLength || null,
     quoted_id: parsed.quotedId,
     location_lat: loc?.lat || null,
     location_lon: loc?.lon || null,
@@ -223,6 +230,11 @@ export function startListener(
           media_mime: null,
           media_path: null,
           media_size: null,
+          media_direct_path: null,
+          media_key: null,
+          media_file_sha256: null,
+          media_file_enc_sha256: null,
+          media_file_length: null,
           quoted_id: key.id,
           location_lat: null,
           location_lon: null,

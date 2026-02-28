@@ -13,6 +13,11 @@ export interface MessageRow {
   media_mime: string | null;
   media_path: string | null;
   media_size: number | null;
+  media_direct_path: string | null;
+  media_key: string | null;
+  media_file_sha256: string | null;
+  media_file_enc_sha256: string | null;
+  media_file_length: number | null;
   quoted_id: string | null;
   location_lat: number | null;
   location_lon: number | null;
@@ -21,6 +26,11 @@ export interface MessageRow {
   timestamp: number;
   raw: string | null;
   created_at: number;
+}
+
+export interface SearchResult extends MessageRow {
+  snippet: string | null;
+  rank: number;
 }
 
 export interface ChatRow {
@@ -83,12 +93,17 @@ export function deserializeWAMessage(raw: string): unknown {
 export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
   const db = getDb();
   db.prepare(`
-    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
-    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
+    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
+    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
     ON CONFLICT(id) DO UPDATE SET
       body = COALESCE(excluded.body, messages.body),
       sender_name = COALESCE(excluded.sender_name, messages.sender_name),
       media_path = COALESCE(excluded.media_path, messages.media_path),
+      media_direct_path = COALESCE(excluded.media_direct_path, messages.media_direct_path),
+      media_key = COALESCE(excluded.media_key, messages.media_key),
+      media_file_sha256 = COALESCE(excluded.media_file_sha256, messages.media_file_sha256),
+      media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
+      media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
       raw = COALESCE(excluded.raw, messages.raw)
   `).run(row);
 }
@@ -145,12 +160,17 @@ export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void
   if (rows.length === 0) return;
   const db = getDb();
   const stmt = db.prepare(`
-    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
-    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
+    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
+    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
     ON CONFLICT(id) DO UPDATE SET
       body = COALESCE(excluded.body, messages.body),
       sender_name = COALESCE(excluded.sender_name, messages.sender_name),
       media_path = COALESCE(excluded.media_path, messages.media_path),
+      media_direct_path = COALESCE(excluded.media_direct_path, messages.media_direct_path),
+      media_key = COALESCE(excluded.media_key, messages.media_key),
+      media_file_sha256 = COALESCE(excluded.media_file_sha256, messages.media_file_sha256),
+      media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
+      media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
       raw = COALESCE(excluded.raw, messages.raw)
   `);
   db.transaction(() => {
@@ -229,11 +249,59 @@ export function listMessages(opts: ListMessagesOpts): MessageRow[] {
     .all(...params) as MessageRow[];
 }
 
+function toFtsQuery(query: string): string {
+  return `"${query.replace(/"/g, '""')}"`;
+}
+
+let _ftsAvailable: boolean | undefined;
+
+function canUseFts(db: Database.Database): boolean {
+  if (_ftsAvailable !== undefined) return _ftsAvailable;
+  try {
+    db.prepare("SELECT 1 FROM messages_fts LIMIT 0").run();
+    _ftsAvailable = true;
+  } catch {
+    _ftsAvailable = false;
+  }
+  return _ftsAvailable;
+}
+
 export function searchMessages(
   query: string,
   opts?: { chatJid?: string; senderJid?: string; limit?: number }
-): MessageRow[] {
+): SearchResult[] {
   const db = getDb();
+  const limit = opts?.limit || 50;
+
+  if (canUseFts(db)) {
+    const ftsQuery = toFtsQuery(query);
+    const conditions = ["messages_fts MATCH ?"];
+    const params: unknown[] = [ftsQuery];
+
+    let chatFilter = "";
+    if (opts?.chatJid) {
+      chatFilter += " AND m.chat_jid = ?";
+      params.push(opts.chatJid);
+    }
+    if (opts?.senderJid) {
+      chatFilter += " AND m.sender_jid = ?";
+      params.push(opts.senderJid);
+    }
+    params.push(limit);
+
+    return db
+      .prepare(
+        `SELECT m.*, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet, rank
+         FROM messages_fts
+         JOIN messages m ON m.rowid = messages_fts.rowid
+         WHERE ${conditions.join(" AND ")}${chatFilter}
+         ORDER BY rank
+         LIMIT ?`
+      )
+      .all(...params) as SearchResult[];
+  }
+
+  // Fallback: LIKE search (pre-FTS DBs)
   const conditions = ["body LIKE ?"];
   const params: unknown[] = [`%${query}%`];
   if (opts?.chatJid) {
@@ -244,12 +312,14 @@ export function searchMessages(
     conditions.push("sender_jid = ?");
     params.push(opts.senderJid);
   }
-  params.push(opts?.limit || 50);
-  return db
+  params.push(limit);
+  const rows = db
     .prepare(
       `SELECT * FROM messages WHERE ${conditions.join(" AND ")} ORDER BY timestamp DESC LIMIT ?`
     )
     .all(...params) as MessageRow[];
+
+  return rows.map((r) => ({ ...r, snippet: null, rank: 0 }));
 }
 
 export function getMessage(id: string): MessageRow | undefined {
@@ -311,6 +381,44 @@ export function getMessageCount(): number {
     count: number;
   };
   return row.count;
+}
+
+// --- Context window ---
+
+export function getMessageContext(
+  id: string,
+  opts?: { beforeCount?: number; afterCount?: number }
+): { target: MessageRow; before: MessageRow[]; after: MessageRow[] } | null {
+  const db = getDb();
+  const target = db
+    .prepare("SELECT *, rowid FROM messages WHERE id = ?")
+    .get(id) as (MessageRow & { rowid: number }) | undefined;
+
+  if (!target) return null;
+
+  const beforeCount = opts?.beforeCount ?? 10;
+  const afterCount = opts?.afterCount ?? 10;
+
+  const before = db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE chat_jid = ? AND (timestamp < ? OR (timestamp = ? AND rowid < ?))
+       ORDER BY timestamp DESC, rowid DESC
+       LIMIT ?`
+    )
+    .all(target.chat_jid, target.timestamp, target.timestamp, target.rowid, beforeCount) as MessageRow[];
+  before.reverse();
+
+  const after = db
+    .prepare(
+      `SELECT * FROM messages
+       WHERE chat_jid = ? AND (timestamp > ? OR (timestamp = ? AND rowid > ?))
+       ORDER BY timestamp ASC, rowid ASC
+       LIMIT ?`
+    )
+    .all(target.chat_jid, target.timestamp, target.timestamp, target.rowid, afterCount) as MessageRow[];
+
+  return { target, before, after };
 }
 
 // --- Delete operations ---

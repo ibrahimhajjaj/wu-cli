@@ -8,14 +8,16 @@ import { existsSync, unlinkSync } from "fs";
 import { DB_PATH } from "../config/paths.js";
 import { closeDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
-import { downloadMedia } from "../core/media.js";
-import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode } from "../core/groups.js";
+import { downloadMedia, downloadMediaBatch } from "../core/media.js";
+import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
+import { backfillHistory } from "../core/backfill.js";
 import {
   listChats, listMessages, searchMessages, searchChats,
   listContacts, searchContacts, getGroupParticipants,
-  getMessageCount, upsertMessage,
+  getMessageCount, getMessageContext, upsertMessage,
 } from "../core/store.js";
-import { sshWuExec } from "../core/remote.js";
+import { getDb } from "../db/database.js";
+import { sshWuExec, syncDb } from "../core/remote.js";
 
 function jsonResult(data: unknown) {
   return {
@@ -94,6 +96,8 @@ export function registerTools(
             body: params.message || null,
             type: "text",
             media_mime: null, media_path: null, media_size: null,
+            media_direct_path: null, media_key: null, media_file_sha256: null,
+            media_file_enc_sha256: null, media_file_length: null,
             quoted_id: params.reply_to || null,
             location_lat: null, location_lon: null, location_name: null,
             is_from_me: 1,
@@ -256,7 +260,7 @@ export function registerTools(
   // --- wu_messages_search ---
   server.tool(
     "wu_messages_search",
-    "Search WhatsApp messages by text content",
+    "Search WhatsApp messages by text content (FTS5 full-text search with relevance ranking)",
     {
       query: z.string().describe("Search query"),
       chat: z.string().optional().describe("Filter by chat JID"),
@@ -278,6 +282,7 @@ export function registerTools(
             chat_jid: r.chat_jid,
             sender_name: r.sender_name,
             body: r.body,
+            snippet: r.snippet,
             type: r.type,
             timestamp: r.timestamp,
           }))
@@ -539,6 +544,222 @@ export function registerTools(
           const match = sshResult.stdout.match(/https:\/\/chat\.whatsapp\.com\/\S+/);
           if (match) return jsonResult({ link: match[0] });
           return jsonResult({ output: sshResult.stdout.trim() });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
+    }
+  );
+
+  // --- wu_messages_context ---
+  server.tool(
+    "wu_messages_context",
+    "Get surrounding messages (before/after) for a specific message — useful for understanding conversation context",
+    {
+      message_id: z.string().describe("Message ID to get context for"),
+      before: z.number().optional().default(10).describe("Number of messages before"),
+      after: z.number().optional().default(10).describe("Number of messages after"),
+    },
+    async (params) => {
+      try {
+        const result = getMessageContext(params.message_id, {
+          beforeCount: params.before,
+          afterCount: params.after,
+        });
+        if (!result) return errorResult(`Message not found: ${params.message_id}`);
+        const fmt = (m: any) => ({
+          id: m.id,
+          sender: m.sender_jid,
+          sender_name: m.sender_name,
+          body: m.body,
+          type: m.type,
+          timestamp: m.timestamp,
+        });
+        return jsonResult({
+          chat_jid: result.target.chat_jid,
+          target: fmt(result.target),
+          before: result.before.map(fmt),
+          after: result.after.map(fmt),
+        });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_history_backfill ---
+  server.tool(
+    "wu_history_backfill",
+    "Request older message history from WhatsApp for a chat (on-demand backfill)",
+    {
+      jid: z.string().describe("Chat JID to backfill"),
+      count: z.number().optional().default(50).describe("Number of messages to request"),
+      timeout_ms: z.number().optional().default(30000).describe("Timeout in ms"),
+    },
+    async (params) => {
+      const sock = getSock();
+      if (sock) {
+        try {
+          const result = await backfillHistory(sock, params.jid, params.count, config, {
+            timeoutMs: params.timeout_ms,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "history", "backfill", params.jid,
+            "--count", String(params.count),
+            "--timeout", String(params.timeout_ms),
+            "--json",
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote backfill failed: ${sshResult.stderr}`);
+          }
+          const result = JSON.parse(sshResult.stdout);
+
+          // Sync DB to pull new messages locally
+          try {
+            await syncDb(remote.remote, DB_PATH);
+          } catch { /* best effort */ }
+
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
+    }
+  );
+
+  // --- wu_media_download_batch ---
+  server.tool(
+    "wu_media_download_batch",
+    "Download media from multiple WhatsApp messages in parallel",
+    {
+      message_ids: z.array(z.string()).optional().describe("Specific message IDs to download"),
+      chat: z.string().optional().describe("Chat JID — find undownloaded media in this chat"),
+      limit: z.number().optional().default(50).describe("Max messages to download (when using chat)"),
+      concurrency: z.number().optional().default(4).describe("Parallel download workers"),
+    },
+    async (params) => {
+      const sock = getSock();
+      if (!sock) {
+        if (remote) {
+          try {
+            const args = ["media", "download-batch"];
+            if (params.chat) args.push(params.chat);
+            if (params.limit) args.push("--limit", String(params.limit));
+            if (params.concurrency) args.push("--concurrency", String(params.concurrency));
+            args.push("--json");
+
+            const sshResult = await sshWuExec(remote.remote, args);
+            if (sshResult.exitCode !== 0) {
+              return errorResult(`Remote batch download failed: ${sshResult.stderr}`);
+            }
+            return jsonResult(JSON.parse(sshResult.stdout));
+          } catch (err) {
+            return errorResult((err as Error).message);
+          }
+        }
+        return errorResult("Not connected to WhatsApp (media download requires connection)");
+      }
+
+      try {
+        let ids = params.message_ids;
+        if (!ids || ids.length === 0) {
+          if (!params.chat) return errorResult("Provide message_ids or chat");
+          const db = getDb();
+          const rows = db
+            .prepare(
+              "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
+            )
+            .all(params.chat, params.limit) as Array<{ id: string }>;
+          ids = rows.map((r) => r.id);
+          if (ids.length === 0) return jsonResult({ results: [], errors: [], message: "No undownloaded media found" });
+        }
+
+        const { results, errors } = await downloadMediaBatch(ids, sock, config, undefined, {
+          concurrency: params.concurrency,
+        });
+        return jsonResult({ results, errors });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_groups_rename ---
+  server.tool(
+    "wu_groups_rename",
+    "Rename a WhatsApp group",
+    {
+      jid: z.string().describe("Group JID"),
+      name: z.string().describe("New group name"),
+    },
+    async (params) => {
+      const sock = getSock();
+      if (sock) {
+        try {
+          await renameGroup(sock, params.jid, params.name, config);
+          return jsonResult({ success: true, jid: params.jid, name: params.name });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "groups", "rename", params.jid, params.name,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote rename failed: ${sshResult.stderr}`);
+          }
+          return jsonResult({ success: true, jid: params.jid, name: params.name });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
+    }
+  );
+
+  // --- wu_groups_join ---
+  server.tool(
+    "wu_groups_join",
+    "Join a WhatsApp group by invite code or URL",
+    {
+      code: z.string().describe("Invite code or full URL (e.g. https://chat.whatsapp.com/ABC123)"),
+    },
+    async (params) => {
+      const sock = getSock();
+      if (sock) {
+        try {
+          const jid = await joinGroupByInvite(sock, params.code);
+          return jsonResult({ success: true, jid });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "groups", "join", params.code,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote join failed: ${sshResult.stderr}`);
+          }
+          return jsonResult({ success: true, output: sshResult.stdout.trim() });
         } catch (err) {
           return errorResult((err as Error).message);
         }

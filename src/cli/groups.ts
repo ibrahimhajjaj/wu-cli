@@ -6,6 +6,8 @@ import {
   createGroup,
   getInviteCode,
   leaveGroup,
+  renameGroup,
+  joinGroupByInvite,
 } from "../core/groups.js";
 import {
   listChats,
@@ -242,5 +244,37 @@ export function registerGroupsCommand(program: Command): void {
         return;
       }
       outputResult(participants, { json: opts.json });
+    });
+
+  groups
+    .command("rename <jid> <name>")
+    .description("Rename a group")
+    .action(async (jid: string, name: string) => {
+      const config = loadConfig();
+      try {
+        await withConnection(async (sock) => {
+          await renameGroup(sock, jid, name, config);
+          console.log(`Renamed group ${jid} to: ${name}`);
+        });
+      } catch (err) {
+        const error = err as Error & { exitCode?: number };
+        console.error(error.message);
+        process.exit(error.exitCode || EXIT_GENERAL_ERROR);
+      }
+    });
+
+  groups
+    .command("join <code-or-url>")
+    .description("Join a group by invite code or URL")
+    .action(async (codeOrUrl: string) => {
+      try {
+        await withConnection(async (sock) => {
+          const jid = await joinGroupByInvite(sock, codeOrUrl);
+          console.log(`Joined group: ${jid || "(unknown JID)"}`);
+        });
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exit(EXIT_GENERAL_ERROR);
+      }
     });
 }

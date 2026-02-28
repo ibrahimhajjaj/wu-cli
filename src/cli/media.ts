@@ -1,8 +1,10 @@
 import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
-import { downloadMedia } from "../core/media.js";
+import { downloadMedia, downloadMediaBatch } from "../core/media.js";
 import { sendMedia } from "../core/sender.js";
 import { loadConfig } from "../config/schema.js";
+import { getDb } from "../db/database.js";
+import { outputResult } from "./format.js";
 import { EXIT_GENERAL_ERROR, EXIT_NOT_FOUND } from "./exit-codes.js";
 
 export function registerMediaCommand(program: Command): void {
@@ -69,6 +71,80 @@ export function registerMediaCommand(program: Command): void {
           const error = err as Error & { exitCode?: number };
           console.error(error.message);
           process.exit(error.exitCode || EXIT_GENERAL_ERROR);
+        }
+      }
+    );
+
+  media
+    .command("download-batch <jid>")
+    .description("Download undownloaded media in a chat (parallel)")
+    .option("--limit <n>", "Max messages to download", "50")
+    .option("--concurrency <n>", "Parallel workers", "4")
+    .option("--out <dir>", "Output directory")
+    .option("--json", "Output as JSON")
+    .action(
+      async (
+        jid: string,
+        opts: { limit: string; concurrency: string; out?: string; json?: boolean }
+      ) => {
+        const config = loadConfig();
+        const limit = parseInt(opts.limit, 10);
+        const concurrency = parseInt(opts.concurrency, 10);
+
+        const db = getDb();
+        const rows = db
+          .prepare(
+            "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
+          )
+          .all(jid, limit) as Array<{ id: string }>;
+
+        if (rows.length === 0) {
+          if (opts.json) {
+            outputResult({ results: [], errors: [] }, { json: true });
+          } else {
+            console.log("No undownloaded media found.");
+          }
+          return;
+        }
+
+        if (!opts.json) {
+          console.log(`Found ${rows.length} media to download (concurrency: ${concurrency})`);
+        }
+
+        try {
+          await withConnection(async (sock) => {
+            const { results, errors } = await downloadMediaBatch(
+              rows.map((r) => r.id),
+              sock,
+              config,
+              opts.out,
+              {
+                concurrency,
+                onProgress: (completed, total) => {
+                  if (!opts.json) {
+                    process.stderr.write(`\r  ${completed}/${total}`);
+                  }
+                },
+              }
+            );
+
+            if (!opts.json) process.stderr.write("\n");
+
+            if (opts.json) {
+              outputResult({ results, errors }, { json: true });
+            } else {
+              console.log(`Downloaded: ${results.length}`);
+              if (errors.length > 0) {
+                console.log(`Errors: ${errors.length}`);
+                for (const e of errors) {
+                  console.error(`  ${e.msgId}: ${e.error}`);
+                }
+              }
+            }
+          });
+        } catch (err) {
+          console.error((err as Error).message);
+          process.exit(EXIT_GENERAL_ERROR);
         }
       }
     );

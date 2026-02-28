@@ -1,6 +1,7 @@
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { assertCanManage } from "./constraints.js";
+import { upsertChat } from "./store.js";
 import { createChildLogger } from "../config/logger.js";
 
 const logger = createChildLogger("groups");
@@ -44,4 +45,34 @@ export async function leaveGroup(
   assertCanManage(jid, config);
   logger.debug({ jid }, "Leaving group");
   await sock.groupLeave(jid);
+}
+
+export async function renameGroup(
+  sock: WASocket,
+  jid: string,
+  newName: string,
+  config: WuConfig
+): Promise<void> {
+  assertCanManage(jid, config);
+  logger.debug({ jid, newName }, "Renaming group");
+  await sock.groupUpdateSubject(jid, newName);
+  upsertChat({
+    jid,
+    name: newName,
+    type: "group",
+    participant_count: null,
+    description: null,
+    last_message_at: null,
+  });
+}
+
+export async function joinGroupByInvite(
+  sock: WASocket,
+  codeOrUrl: string
+): Promise<string | undefined> {
+  const code = codeOrUrl.includes("chat.whatsapp.com/")
+    ? codeOrUrl.split("chat.whatsapp.com/").pop()!
+    : codeOrUrl;
+  logger.debug({ code }, "Joining group by invite");
+  return sock.groupAcceptInvite(code);
 }
