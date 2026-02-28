@@ -42,6 +42,7 @@ export async function startMcpServer(): Promise<void> {
     ownsConnection = true;
 
     const conn = await createConnection({
+      quiet: true,
       onOpen: () => {
         process.stderr.write("wu-mcp: Connected to WhatsApp\n");
       },
@@ -53,7 +54,7 @@ export async function startMcpServer(): Promise<void> {
     await waitForConnection(sock);
 
     // Start listener for message collection
-    startListener(sock, { config });
+    startListener(sock, { config, quiet: true });
   }
 
   // Graceful shutdown
