@@ -3,6 +3,7 @@ import { withConnection } from "../core/connection.js";
 import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
 import { listMessages, searchMessages } from "../core/store.js";
 import { loadConfig } from "../config/schema.js";
+import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
 import { EXIT_NOT_FOUND, EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
@@ -23,6 +24,12 @@ export function registerMessagesCommand(program: Command): void {
         jid: string,
         opts: { limit: string; before?: string; after?: string; json?: boolean }
       ) => {
+        const config = loadConfig();
+        if (!shouldCollect(jid, config)) {
+          console.log(`Chat ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
+          return;
+        }
+
         const rows = listMessages({
           chatJid: jid,
           limit: parseInt(opts.limit, 10),
@@ -60,11 +67,14 @@ export function registerMessagesCommand(program: Command): void {
         query: string,
         opts: { chat?: string; from?: string; limit: string; json?: boolean }
       ) => {
-        const rows = searchMessages(query, {
+        const config = loadConfig();
+        const limit = parseInt(opts.limit, 10);
+        const allRows = searchMessages(query, {
           chatJid: opts.chat,
           senderJid: opts.from,
-          limit: parseInt(opts.limit, 10),
+          limit: 10000,
         });
+        const rows = allRows.filter((r) => shouldCollect(r.chat_jid, config)).slice(0, limit);
 
         if (rows.length === 0) {
           console.log("No messages found.");

@@ -1,5 +1,7 @@
 import { Command } from "commander";
 import { listChats, searchChats } from "../core/store.js";
+import { loadConfig } from "../config/schema.js";
+import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
 
 export function registerChatsCommand(program: Command): void {
@@ -11,7 +13,10 @@ export function registerChatsCommand(program: Command): void {
     .option("--limit <n>", "Max chats to show", "100")
     .option("--json", "Output as JSON")
     .action((opts: { limit: string; json?: boolean }) => {
-      const rows = listChats({ limit: parseInt(opts.limit, 10) });
+      const config = loadConfig();
+      const limit = parseInt(opts.limit, 10);
+      const allRows = listChats({ limit: 10000 });
+      const rows = allRows.filter((r) => shouldCollect(r.jid, config)).slice(0, limit);
 
       if (rows.length === 0) {
         console.log("No chats found. Run `wu daemon` or `wu listen` to collect data.");
@@ -37,7 +42,10 @@ export function registerChatsCommand(program: Command): void {
     .option("--limit <n>", "Max results", "100")
     .option("--json", "Output as JSON")
     .action((query: string, opts: { limit: string; json?: boolean }) => {
-      const rows = searchChats(query, { limit: parseInt(opts.limit, 10) });
+      const config = loadConfig();
+      const limit = parseInt(opts.limit, 10);
+      const allRows = searchChats(query, { limit: 10000 });
+      const rows = allRows.filter((r) => shouldCollect(r.jid, config)).slice(0, limit);
 
       if (rows.length === 0) {
         console.log("No chats found matching query.");

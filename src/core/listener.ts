@@ -43,6 +43,7 @@ export interface ParsedMessage {
 
 export interface ListenerOptions {
   config: WuConfig;
+  quiet?: boolean;
   onMessage?: (msg: ParsedMessage) => void;
 }
 
@@ -400,15 +401,17 @@ export function startListener(
         contacts: any[];
         isLatest: boolean;
       }) => {
-        logger.info(
-          {
-            messages: messages.length,
-            chats: chats.length,
-            contacts: contacts.length,
-            isLatest,
-          },
-          "History sync received"
-        );
+        if (!opts.quiet) {
+          logger.info(
+            {
+              messages: messages.length,
+              chats: chats.length,
+              contacts: contacts.length,
+              isLatest,
+            },
+            "History sync received"
+          );
+        }
 
         // Bulk upsert chats
         const chatRows = chats
@@ -455,5 +458,5 @@ export function startListener(
     )
   );
 
-  logger.info("Listener started — collecting messages");
+  if (!opts.quiet) logger.info("Listener started — collecting messages");
 }

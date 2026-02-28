@@ -5,10 +5,11 @@ import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
 import { getMessageCount } from "../core/store.js";
-import { createChildLogger } from "../config/logger.js";
 import { EXIT_CONNECTION_FAILED } from "./exit-codes.js";
 
-const logger = createChildLogger("daemon");
+function log(msg: string): void {
+  process.stderr.write(`  ${msg}\n`);
+}
 
 export function registerDaemonCommand(program: Command): void {
   program
@@ -27,12 +28,19 @@ export function registerDaemonCommand(program: Command): void {
 
       const conn = new ReconnectingConnection({
         isDaemon: true,
+        quiet: true,
         onReady: (sock) => {
-          logger.info("Connected — starting message collection");
-          startListener(sock, { config });
+          log("● Connected — collecting messages");
+          startListener(sock, { config, quiet: true });
         },
         onDisconnect: () => {
-          logger.warn("Disconnected — waiting for reconnection");
+          log("⚠ Disconnected — waiting for reconnection");
+        },
+        onReconnecting: (delayMs) => {
+          log(`● Reconnecting in ${(delayMs / 1000).toFixed(0)}s...`);
+        },
+        onFatal: (reason) => {
+          log(`✗ ${reason}`);
         },
       });
 
@@ -40,19 +48,13 @@ export function registerDaemonCommand(program: Command): void {
       const healthInterval = setInterval(() => {
         const mem = process.memoryUsage();
         const uptimeH = ((Date.now() - startTime) / 3600000).toFixed(1);
-        const sock = conn.getSock();
-        logger.info({
-          rss_mb: (mem.rss / 1048576).toFixed(1),
-          heap_mb: (mem.heapUsed / 1048576).toFixed(1),
-          uptime_h: uptimeH,
-          messages_stored: getMessageCount(),
-          connected: sock ? (sock.ws as any)?.isOpen ?? false : false,
-        }, "Health check");
+        const msgs = getMessageCount();
+        log(`♥ RSS: ${(mem.rss / 1048576).toFixed(0)}MB | Heap: ${(mem.heapUsed / 1048576).toFixed(0)}MB | Uptime: ${uptimeH}h | Messages: ${msgs}`);
       }, 5 * 60 * 1000);
 
       // Graceful shutdown
       const shutdown = async () => {
-        logger.info("Shutting down daemon...");
+        log("● Shutting down...");
         clearInterval(healthInterval);
         await conn.stop();
         closeDb();
@@ -65,9 +67,9 @@ export function registerDaemonCommand(program: Command): void {
 
       try {
         await conn.start();
-        logger.info("Daemon started");
+        log("● Daemon started");
       } catch (err) {
-        logger.error({ err }, "Failed to start daemon");
+        log(`✗ Failed to start: ${(err as Error).message}`);
         releaseLock();
         process.exit(EXIT_CONNECTION_FAILED);
       }

@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/schema.js";
-import { resolveConstraint } from "../core/constraints.js";
+import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia } from "../core/media.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode } from "../core/groups.js";
@@ -173,11 +173,13 @@ export function registerTools(
     },
     async (params) => {
       try {
-        const results = searchMessages(params.query, {
+        const cfg = loadConfig();
+        const allResults = searchMessages(params.query, {
           chatJid: params.chat,
           senderJid: params.from,
-          limit: params.limit,
+          limit: 10000,
         });
+        const results = allResults.filter((r) => shouldCollect(r.chat_jid, cfg)).slice(0, params.limit);
         return jsonResult(
           results.map((r) => ({
             id: r.id,
@@ -202,7 +204,9 @@ export function registerTools(
       limit: z.number().optional().default(100).describe("Max chats"),
     },
     async (params) => {
-      const chats = listChats({ limit: params.limit });
+      const cfg = loadConfig();
+      const allChats = listChats({ limit: 10000 });
+      const chats = allChats.filter((c) => shouldCollect(c.jid, cfg)).slice(0, params.limit);
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,
@@ -225,6 +229,10 @@ export function registerTools(
       after: z.number().optional().describe("After timestamp (unix)"),
     },
     async (params) => {
+      const cfg = loadConfig();
+      if (!shouldCollect(params.chat, cfg)) {
+        return errorResult(`Chat ${params.chat} is blocked by constraints`);
+      }
       const messages = listMessages({
         chatJid: params.chat,
         limit: params.limit,
@@ -288,7 +296,9 @@ export function registerTools(
       limit: z.number().optional().default(100).describe("Max results"),
     },
     async (params) => {
-      const chats = searchChats(params.query, { limit: params.limit });
+      const cfg = loadConfig();
+      const allChats = searchChats(params.query, { limit: 10000 });
+      const chats = allChats.filter((c) => shouldCollect(c.jid, cfg)).slice(0, params.limit);
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,
@@ -334,9 +344,13 @@ export function registerTools(
         const sock = getSock();
         if (!sock) return errorResult("Not connected to WhatsApp");
         try {
+          const cfg = loadConfig();
           const groups = await fetchAllGroups(sock);
+          const filtered = Object.values(groups)
+            .filter((g: any) => shouldCollect(g.id, cfg))
+            .slice(0, params.limit);
           return jsonResult(
-            Object.values(groups).slice(0, params.limit).map((g: any) => ({
+            filtered.map((g: any) => ({
               jid: g.id,
               name: g.subject,
               participant_count: g.participants?.length ?? 0,
@@ -346,16 +360,18 @@ export function registerTools(
           return errorResult((err as Error).message);
         }
       }
-      const chats = listChats({ limit: params.limit });
+      const cfg = loadConfig();
+      const allChats = listChats({ limit: 10000 });
+      const chats = allChats
+        .filter((c) => c.type === "group" && shouldCollect(c.jid, cfg))
+        .slice(0, params.limit);
       return jsonResult(
-        chats
-          .filter((c) => c.type === "group")
-          .map((c) => ({
-            jid: c.jid,
-            name: c.name,
-            participant_count: c.participant_count,
-            last_message_at: c.last_message_at,
-          }))
+        chats.map((c) => ({
+          jid: c.jid,
+          name: c.name,
+          participant_count: c.participant_count,
+          last_message_at: c.last_message_at,
+        }))
       );
     }
   );
@@ -369,6 +385,10 @@ export function registerTools(
       live: z.boolean().optional().default(false).describe("Fetch live from WhatsApp"),
     },
     async (params) => {
+      const cfg = loadConfig();
+      if (!shouldCollect(params.jid, cfg)) {
+        return errorResult(`Group ${params.jid} is blocked by constraints`);
+      }
       if (params.live) {
         const sock = getSock();
         if (!sock) return errorResult("Not connected to WhatsApp");
@@ -380,7 +400,7 @@ export function registerTools(
         }
       }
       const participants = getGroupParticipants(params.jid);
-      const chats = listChats({ limit: 1000 });
+      const chats = listChats({ limit: 10000 });
       const group = chats.find((c) => c.jid === params.jid);
       return jsonResult({
         jid: params.jid,

@@ -13,7 +13,9 @@ import { createChildLogger } from "../config/logger.js";
 const logger = createChildLogger("connection");
 const silentLogger = pino({ level: "silent" });
 
-const VERSION = "0.1.0";
+import { createRequire } from "node:module";
+const _require = createRequire(import.meta.url);
+const VERSION = _require("../../package.json").version;
 
 export interface ConnectionOptions {
   /** Called when QR code is available for scanning */
@@ -215,14 +217,24 @@ export class ReconnectingConnection {
   private onDisconnect?: () => void;
   private isDaemon: boolean;
 
+  private quiet: boolean;
+  private onReconnecting?: (delayMs: number) => void;
+  private onFatal?: (reason: string) => void;
+
   constructor(opts: {
     isDaemon?: boolean;
+    quiet?: boolean;
     onReady?: (sock: WASocket) => void;
     onDisconnect?: () => void;
+    onReconnecting?: (delayMs: number) => void;
+    onFatal?: (reason: string) => void;
   }) {
     this.isDaemon = opts.isDaemon ?? false;
+    this.quiet = opts.quiet ?? false;
     this.onReady = opts.onReady;
     this.onDisconnect = opts.onDisconnect;
+    this.onReconnecting = opts.onReconnecting;
+    this.onFatal = opts.onFatal;
   }
 
   async start(): Promise<WASocket> {
@@ -232,6 +244,7 @@ export class ReconnectingConnection {
   private async connect(): Promise<WASocket> {
     const { sock, flushCreds } = await createConnection({
       isDaemon: this.isDaemon,
+      quiet: this.quiet,
       onOpen: () => {
         this.consecutiveFailures = 0;
         this.backoff = 2000;
@@ -242,21 +255,23 @@ export class ReconnectingConnection {
         if (willReconnect && !this.stopped) {
           this.consecutiveFailures++;
           if (this.consecutiveFailures >= this.maxFailures) {
-            logger.error("Too many consecutive failures — giving up");
+            this.onFatal?.("Too many consecutive failures — giving up");
+            if (!this.quiet) logger.error("Too many consecutive failures — giving up");
             return;
           }
           const delay =
             _reason === DisconnectReason.connectionReplaced
               ? 5000
               : Math.min(this.backoff * Math.pow(2, this.consecutiveFailures - 1), this.maxBackoff);
-          logger.info({ delay }, "Reconnecting...");
+          this.onReconnecting?.(delay);
+          if (!this.quiet) logger.info({ delay }, "Reconnecting...");
           setTimeout(() => {
             if (!this.stopped) this.connect().catch(() => {});
           }, delay);
         }
       },
       onQr: () => {
-        logger.warn("QR code requested during reconnection — already authenticated?");
+        if (!this.quiet) logger.warn("QR code requested during reconnection — already authenticated?");
       },
     });
 

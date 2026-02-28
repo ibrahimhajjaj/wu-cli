@@ -14,6 +14,7 @@ import {
   upsertGroupParticipants,
 } from "../core/store.js";
 import { loadConfig } from "../config/schema.js";
+import { shouldCollect } from "../core/constraints.js";
 import { outputResult } from "./format.js";
 import { EXIT_GENERAL_ERROR, EXIT_NOT_FOUND } from "./exit-codes.js";
 
@@ -36,15 +37,19 @@ export function registerGroupsCommand(program: Command): void {
     .action(async (opts: { limit: string; live?: boolean; json?: boolean }) => {
       const limit = parseInt(opts.limit, 10);
 
+      const config = loadConfig();
+
       if (opts.live) {
         // Live fetch from WhatsApp
         try {
           await withConnection(async (sock) => {
             const allGroups = await fetchAllGroups(sock);
-            const entries = Object.values(allGroups).slice(0, limit);
+            const entries = Object.values(allGroups)
+              .filter((g: any) => shouldCollect(g.id, config))
+              .slice(0, limit);
 
             if (entries.length === 0) {
-              console.log("No groups found.");
+              console.log("No groups found (matching constraints).");
               return;
             }
 
@@ -94,8 +99,10 @@ export function registerGroupsCommand(program: Command): void {
       }
 
       // Default: cached from DB
-      const allChats = listChats({ limit: limit * 2 });
-      const groupChats = allChats.filter((c) => c.type === "group").slice(0, limit);
+      const allChats = listChats({ limit: 10000 });
+      const groupChats = allChats
+        .filter((c) => c.type === "group" && shouldCollect(c.jid, config))
+        .slice(0, limit);
 
       if (groupChats.length === 0) {
         console.log(
@@ -121,6 +128,12 @@ export function registerGroupsCommand(program: Command): void {
     .option("--json", "Output as JSON")
     .option("--live", "Fetch live from WhatsApp")
     .action(async (jid: string, opts: { json?: boolean; live?: boolean }) => {
+      const config = loadConfig();
+      if (!shouldCollect(jid, config)) {
+        console.error(`Group ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
+        process.exit(EXIT_GENERAL_ERROR);
+      }
+
       if (opts.live) {
         try {
           await withConnection(async (sock) => {
@@ -216,6 +229,11 @@ export function registerGroupsCommand(program: Command): void {
     .description("List group participants (from cache)")
     .option("--json", "Output as JSON")
     .action((jid: string, opts: { json?: boolean }) => {
+      const config = loadConfig();
+      if (!shouldCollect(jid, config)) {
+        console.error(`Group ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
+        process.exit(EXIT_GENERAL_ERROR);
+      }
       const participants = getGroupParticipants(jid);
       if (participants.length === 0) {
         console.log(
