@@ -1,6 +1,6 @@
 {
   "name": "@ibrahimwithi/wu-cli",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "type": "module",
   "description": "WhatsApp CLI tool — like gh is to GitHub, wu is to WhatsApp",
   "author": "Ibrahim Hajjaj",
