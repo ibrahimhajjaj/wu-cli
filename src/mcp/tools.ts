@@ -6,7 +6,7 @@ import { loadConfig, saveConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import { existsSync, unlinkSync } from "fs";
 import { DB_PATH } from "../config/paths.js";
-import { closeDb } from "../db/database.js";
+import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia, downloadMediaBatch } from "../core/media.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
@@ -627,6 +627,7 @@ export function registerTools(
           // Sync DB to pull new messages locally
           try {
             await syncDb(remote.remote, DB_PATH);
+            reloadDb();
           } catch { /* best effort */ }
 
           return jsonResult(result);
@@ -857,6 +858,25 @@ export function registerTools(
       return jsonResult(cfg);
     }
   );
+
+  // --- wu_sync_pull ---
+  if (remote) {
+    server.tool(
+      "wu_sync_pull",
+      "Pull the latest database from the remote server (refreshes local data)",
+      {},
+      async () => {
+        try {
+          await syncDb(remote.remote, DB_PATH);
+          reloadDb();
+          const count = getMessageCount();
+          return jsonResult({ message: "Sync complete", messages_stored: count });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+    );
+  }
 
   // --- wu_db_reset ---
   server.tool(

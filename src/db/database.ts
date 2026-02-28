@@ -24,3 +24,9 @@ export function closeDb(): void {
     _db = undefined;
   }
 }
+
+/** Close and reopen the DB (e.g. after sync replaces the file on disk) */
+export function reloadDb(): void {
+  closeDb();
+  // Next getDb() call will reopen with the new file
+}
