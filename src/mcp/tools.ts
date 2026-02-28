@@ -4,6 +4,9 @@ import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
+import { existsSync, unlinkSync } from "fs";
+import { DB_PATH } from "../config/paths.js";
+import { closeDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia } from "../core/media.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode } from "../core/groups.js";
@@ -521,6 +524,30 @@ export function registerTools(
     async () => {
       const cfg = loadConfig();
       return jsonResult(cfg);
+    }
+  );
+
+  // --- wu_db_reset ---
+  server.tool(
+    "wu_db_reset",
+    "Delete the database and start fresh. Removes all collected messages, chats, and contacts.",
+    {
+      confirm: z.boolean().describe("Must be true to confirm the reset"),
+    },
+    async (params) => {
+      if (!params.confirm) {
+        return errorResult("Set confirm: true to reset the database");
+      }
+      if (!existsSync(DB_PATH)) {
+        return jsonResult({ message: "No database found. Nothing to reset." });
+      }
+      closeDb();
+      unlinkSync(DB_PATH);
+      for (const suffix of ["-wal", "-shm"]) {
+        const p = DB_PATH + suffix;
+        if (existsSync(p)) unlinkSync(p);
+      }
+      return jsonResult({ message: "Database deleted. Run wu daemon or wu listen to start collecting again." });
     }
   );
 }
