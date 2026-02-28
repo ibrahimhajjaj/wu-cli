@@ -5,6 +5,54 @@ import { createChildLogger } from "../config/logger.js";
 
 const logger = createChildLogger("backfill");
 
+/** Register messaging-history.set handler BEFORE sending the request to avoid race conditions */
+function createBackfillWaiter(
+  sock: WASocket,
+  jid: string,
+  count: number,
+  timeoutMs: number,
+): { promise: Promise<void>; cleanup: () => void } {
+  let totalNew = 0;
+  let resolvePromise: () => void;
+  let timer: ReturnType<typeof setTimeout>;
+
+  function handler(data: {
+    messages: any[];
+    peerDataRequestSessionId?: string | null;
+  }) {
+    const forChat = data.messages.filter(
+      (m: any) => m.key?.remoteJid === jid,
+    );
+    totalNew += forChat.length;
+    logger.debug({ chunk: forChat.length, totalNew }, "History chunk received");
+
+    if (totalNew >= count) {
+      clearTimeout(timer);
+      sock.ev.off("messaging-history.set", handler);
+      resolvePromise();
+    }
+  }
+
+  // Register BEFORE request is sent
+  sock.ev.on("messaging-history.set", handler);
+
+  const promise = new Promise<void>((resolve) => {
+    resolvePromise = resolve;
+    timer = setTimeout(() => {
+      logger.debug({ totalNew }, "Backfill timeout reached");
+      sock.ev.off("messaging-history.set", handler);
+      resolve();
+    }, timeoutMs);
+  });
+
+  const cleanup = () => {
+    clearTimeout(timer);
+    sock.ev.off("messaging-history.set", handler);
+  };
+
+  return { promise, cleanup };
+}
+
 export async function backfillHistory(
   sock: WASocket,
   jid: string,
@@ -36,39 +84,15 @@ export async function backfillHistory(
 
   logger.info({ jid, count, oldestId: oldest.id, oldestTs: oldest.timestamp }, "Requesting history backfill");
 
+  // Register handler BEFORE sending request to avoid race condition
+  const { promise, cleanup } = createBackfillWaiter(sock, jid, count, timeoutMs);
+
   // Baileys assigns this to oldestMsgTimestampMs — needs milliseconds
   const sessionId = await (sock as any).fetchMessageHistory(count, key, oldest.timestamp * 1000);
+  logger.debug({ sessionId }, "fetchMessageHistory returned session ID");
 
-  // Wait for messaging-history.set events
-  await new Promise<void>((resolve) => {
-    let totalNew = 0;
-    const timer = setTimeout(() => {
-      logger.debug({ totalNew }, "Backfill timeout reached");
-      sock.ev.off("messaging-history.set", handler);
-      resolve();
-    }, timeoutMs);
-
-    function handler(data: {
-      messages: any[];
-      peerDataRequestSessionId?: string | null;
-    }) {
-      if (data.peerDataRequestSessionId && data.peerDataRequestSessionId !== sessionId) return;
-
-      const forChat = data.messages.filter(
-        (m: any) => m.key?.remoteJid === jid,
-      );
-      totalNew += forChat.length;
-      logger.debug({ chunk: forChat.length, totalNew }, "History chunk received");
-
-      if (totalNew >= count) {
-        clearTimeout(timer);
-        sock.ev.off("messaging-history.set", handler);
-        resolve();
-      }
-    }
-
-    sock.ev.on("messaging-history.set", handler);
-  });
+  // Wait for messaging-history.set events (handler already registered)
+  await promise;
 
   // Count new messages
   const countAfter = (
