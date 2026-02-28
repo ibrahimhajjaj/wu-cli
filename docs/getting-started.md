@@ -176,7 +176,7 @@ Once messages are collected, query them offline (no WhatsApp connection needed):
 # List chats you've collected
 wu chats list
 
-# Search messages
+# Search messages (FTS5 full-text search with relevance ranking)
 wu messages search "meeting"
 
 # List messages in a chat
@@ -184,6 +184,12 @@ wu messages list 120363XXX@g.us --limit 100
 
 # Search within a specific chat
 wu messages search "budget" --chat 120363XXX@g.us
+
+# Backfill older messages from WhatsApp
+wu history backfill 120363XXX@g.us --count 50
+
+# Download all undownloaded media in a chat
+wu media download-batch 120363XXX@g.us --concurrency 4
 
 # List contacts
 wu contacts list

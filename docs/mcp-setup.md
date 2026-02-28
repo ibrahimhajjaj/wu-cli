@@ -98,10 +98,13 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | Tool | Description |
 |---|---|
 | `wu_messages_send` | Send a text or media message |
-| `wu_messages_search` | Search messages by text |
+| `wu_messages_search` | Full-text search messages (FTS5 ranked with snippets) |
 | `wu_messages_list` | List messages in a chat |
+| `wu_messages_context` | Get surrounding messages before/after a specific message |
 | `wu_react` | React to a message with an emoji |
 | `wu_media_download` | Download media from a message |
+| `wu_media_download_batch` | Download multiple media files in parallel |
+| `wu_history_backfill` | Request older message history from WhatsApp |
 | `wu_chats_list` | List all chats |
 | `wu_chats_search` | Search chats by name |
 | `wu_contacts_list` | List all contacts |
@@ -111,6 +114,8 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | `wu_groups_invite` | Get group invite link |
 | `wu_groups_create` | Create a new group |
 | `wu_groups_leave` | Leave a group |
+| `wu_groups_rename` | Rename a group |
+| `wu_groups_join` | Join a group by invite code or URL |
 | `wu_constraints_list` | Show all constraints |
 | `wu_constraints_set` | Allow/block a chat |
 | `wu_constraints_remove` | Remove a per-chat constraint |
@@ -140,7 +145,7 @@ The MCP server operates in three modes, detected automatically:
 | **Read-only** | Local daemon running | SQLite | Disabled |
 | **Remote** | Remote configured + synced DB | Local SQLite | SSH to remote |
 
-In remote mode, write tools (`wu_messages_send`, `wu_react`, `wu_groups_create`, etc.) are routed through SSH to the VPS daemon. Read tools always query the local SQLite database. See [Remote Sync](getting-started.md#remote-sync-vps-setup) for setup.
+In remote mode, write tools (`wu_messages_send`, `wu_react`, `wu_groups_create`, `wu_history_backfill`, etc.) are routed through SSH to the VPS daemon. Read tools always query the local SQLite database. See [Remote Sync](getting-started.md#remote-sync-vps-setup) for setup.
 
 ## Prerequisites
 

@@ -26,12 +26,14 @@ Or from inside Claude Code:
 | Command | Description |
 |---|---|
 | `/wu-send <jid> <message>` | Send a WhatsApp message |
-| `/wu-search <query>` | Search messages |
+| `/wu-search <query>` | Search messages (FTS5 full-text search) |
 | `/wu-messages <jid>` | List messages in a chat |
 | `/wu-chats` | List all chats |
 | `/wu-contacts` | List all contacts |
 | `/wu-react <jid> <id> <emoji>` | React to a message |
 | `/wu-status` | Check connection status |
+| `/wu-context <message-id>` | Get surrounding messages for context |
+| `/wu-backfill <jid>` | Backfill older message history |
 
 ## How It Works
 

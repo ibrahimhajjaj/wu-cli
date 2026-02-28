@@ -63,7 +63,7 @@ wu listen
 | Command | Description |
 |---|---|
 | `wu messages list <jid>` | List messages in a chat |
-| `wu messages search <query>` | Search messages by text |
+| `wu messages search <query>` | Full-text search messages (FTS5 ranked) |
 | `wu messages send <jid> [text]` | Send text, media, or poll |
 | `wu messages react <jid> <id> <emoji>` | React to a message |
 | `wu messages delete <jid> <id>` | Delete a message for everyone |
@@ -80,6 +80,9 @@ wu messages send 120363XXX@g.us "Agreed" --reply-to BAE5ABC123
 
 # Search within a specific chat
 wu messages search "budget" --chat 120363XXX@g.us --limit 20
+
+# Download all undownloaded media in a chat
+wu media download-batch 120363XXX@g.us --limit 50 --concurrency 4
 ```
 
 ### Chats & Contacts
@@ -102,6 +105,8 @@ wu messages search "budget" --chat 120363XXX@g.us --limit 20
 | `wu groups create <name> [jids...]` | Create a new group |
 | `wu groups invite <jid>` | Get invite link |
 | `wu groups leave <jid>` | Leave a group |
+| `wu groups rename <jid> <name>` | Rename a group |
+| `wu groups join <code-or-url>` | Join a group by invite code or URL |
 | `wu groups participants <jid>` | List group participants |
 
 ### Media
@@ -109,7 +114,22 @@ wu messages search "budget" --chat 120363XXX@g.us --limit 20
 | Command | Description |
 |---|---|
 | `wu media download <msg-id>` | Download media from a message |
+| `wu media download-batch <jid>` | Download undownloaded media in parallel |
 | `wu media send <jid> <path>` | Send a media file |
+
+### History
+
+| Command | Description |
+|---|---|
+| `wu history backfill <jid>` | Request older messages from WhatsApp |
+
+```bash
+# Backfill 50 older messages for a group
+wu history backfill 120363XXX@g.us --count 50
+
+# With JSON output
+wu history backfill 120363XXX@g.us --count 20 --json
+```
 
 ### Daemon
 
@@ -285,7 +305,7 @@ wu messages list 120363XXX@g.us --json --limit 1000
 
 When running `wu mcp`, the following are available to AI agents:
 
-**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_messages_search`, `wu_messages_list`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
+**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 
