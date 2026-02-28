@@ -15,9 +15,9 @@ export async function backfillHistory(
   const db = getDb();
   const timeoutMs = opts?.timeoutMs ?? 30_000;
 
-  // Find oldest message in chat
+  // Find oldest real message in chat (skip unknown/protocol messages)
   const oldest = db
-    .prepare("SELECT id, timestamp, is_from_me FROM messages WHERE chat_jid = ? ORDER BY timestamp ASC LIMIT 1")
+    .prepare("SELECT id, timestamp, is_from_me FROM messages WHERE chat_jid = ? AND type != 'unknown' ORDER BY timestamp ASC LIMIT 1")
     .get(jid) as { id: string; timestamp: number; is_from_me: number } | undefined;
 
   if (!oldest) {
@@ -36,7 +36,8 @@ export async function backfillHistory(
 
   logger.info({ jid, count, oldestId: oldest.id, oldestTs: oldest.timestamp }, "Requesting history backfill");
 
-  const sessionId = await (sock as any).fetchMessageHistory(count, key, oldest.timestamp);
+  // Baileys assigns this to oldestMsgTimestampMs — needs milliseconds
+  const sessionId = await (sock as any).fetchMessageHistory(count, key, oldest.timestamp * 1000);
 
   // Wait for messaging-history.set events
   await new Promise<void>((resolve) => {
