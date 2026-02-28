@@ -73,4 +73,5 @@ export async function startMcpServer(): Promise<void> {
   // Start MCP transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  process.stderr.write("wu-mcp: MCP server ready — tools available for AI agents\n");
 }
