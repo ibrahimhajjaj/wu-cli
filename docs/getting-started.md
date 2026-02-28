@@ -49,7 +49,7 @@ If QR scanning doesn't work (e.g., SSH session), use a pairing code instead:
 wu login --code 15551234567
 ```
 
-Replace with your phone number including country code (no `+`). A 8-digit code will be printed — enter it in WhatsApp under **Linked Devices > Link a Device**.
+Replace with your phone number including country code (no `+`). An 8-digit code will be printed — enter it in WhatsApp under **Linked Devices > Link a Device**.
 
 ### Verify
 

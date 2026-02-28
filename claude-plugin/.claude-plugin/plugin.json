@@ -1,6 +1,6 @@
 {
   "name": "wu-whatsapp",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "description": "WhatsApp integration for Claude Code — send messages, search chats, manage groups via wu-cli",
   "author": {
     "name": "Ibrahim Hajjaj"

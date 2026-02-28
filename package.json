@@ -3,6 +3,20 @@
   "version": "0.1.5",
   "type": "module",
   "description": "WhatsApp CLI tool — like gh is to GitHub, wu is to WhatsApp",
+  "author": "Ibrahim Hajjaj",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ibrahimhajjaj/wu-cli.git"
+  },
+  "homepage": "https://github.com/ibrahimhajjaj/wu-cli",
+  "keywords": [
+    "whatsapp",
+    "cli",
+    "mcp",
+    "baileys",
+    "messaging"
+  ],
   "bin": {
     "wu": "./dist/cli/index.js"
   },
