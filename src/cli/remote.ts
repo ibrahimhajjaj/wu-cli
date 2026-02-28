@@ -1,6 +1,7 @@
 import { Command } from "commander";
-import { loadConfig, saveConfig } from "../config/schema.js";
-import { sshWuExec } from "../core/remote.js";
+import { parse as parseYaml } from "yaml";
+import { loadConfig, saveConfig, WuConfigSchema } from "../config/schema.js";
+import { sshWuExec, sshRawExec, remotePath } from "../core/remote.js";
 import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
 export function registerRemoteCommand(program: Command): void {
@@ -106,5 +107,92 @@ export function registerRemoteCommand(program: Command): void {
       config.default_remote = name;
       saveConfig(config);
       console.log(`Default remote set to '${name}'`);
+    });
+
+  remote
+    .command("setup <name>")
+    .description("Sync constraints between local and remote")
+    .option("--push", "Push local constraints to remote")
+    .option("--pull", "Pull remote constraints to local")
+    .action(async (name: string, opts: { push?: boolean; pull?: boolean }) => {
+      const config = loadConfig();
+      const remoteConfig = config.remotes?.[name];
+      if (!remoteConfig) {
+        console.error(`Remote '${name}' not found`);
+        process.exit(EXIT_GENERAL_ERROR);
+      }
+
+      // Default: pull if no local constraints, push if local has them
+      let direction = opts.push ? "push" : opts.pull ? "pull" : undefined;
+
+      if (!direction) {
+        const hasLocal = !!config.constraints;
+        direction = hasLocal ? "push" : "pull";
+        process.stderr.write(`Auto-detected direction: ${direction}\n`);
+      }
+
+      if (direction === "push") {
+        if (!config.constraints) {
+          console.error("No local constraints to push. Set some first:");
+          console.error("  wu config set constraints.default full");
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+
+        // Set default constraint
+        const setDefault = await sshWuExec(remoteConfig, [
+          "config", "set", "constraints.default", config.constraints.default,
+        ]);
+        if (setDefault.exitCode !== 0) {
+          console.error(`Failed to set remote default constraint: ${setDefault.stderr}`);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+        console.log(`Pushed default constraint: ${config.constraints.default}`);
+
+        // Set per-chat constraints
+        for (const [jid, chat] of Object.entries(config.constraints.chats)) {
+          const setChat = await sshWuExec(remoteConfig, [
+            "config", "set", `constraints.chats.${jid}.mode`, chat.mode,
+          ]);
+          if (setChat.exitCode !== 0) {
+            console.error(`Failed to set constraint for ${jid}: ${setChat.stderr}`);
+          } else {
+            console.log(`Pushed constraint: ${jid} = ${chat.mode}`);
+          }
+        }
+
+        console.log("Constraints pushed to remote");
+      } else {
+        // Pull remote config file directly (wu config show outputs YAML)
+        const result = await sshRawExec(remoteConfig, `cat ${remotePath(remoteConfig.wu_home + "/config.yaml")}`);
+        if (result.exitCode !== 0) {
+          console.error(`Failed to read remote config: ${result.stderr}`);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+
+        let remoteFullConfig;
+        try {
+          const parsed = parseYaml(result.stdout);
+          remoteFullConfig = WuConfigSchema.parse(parsed || {});
+        } catch {
+          console.error("Failed to parse remote config");
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+
+        if (!remoteFullConfig.constraints) {
+          console.log("Remote has no constraints configured");
+          return;
+        }
+
+        config.constraints = remoteFullConfig.constraints;
+        saveConfig(config);
+        console.log(`Pulled constraints from remote:`);
+        console.log(`  default: ${config.constraints.default}`);
+        const chatEntries = Object.entries(config.constraints.chats);
+        if (chatEntries.length > 0) {
+          for (const [jid, chat] of chatEntries) {
+            console.log(`  ${jid}: ${chat.mode}`);
+          }
+        }
+      }
     });
 }

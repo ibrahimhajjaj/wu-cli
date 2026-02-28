@@ -9,7 +9,7 @@ export function shellEscape(arg: string): string {
 }
 
 // Expand ~ to $HOME for remote shell (single-quoted ~ won't expand)
-function remotePath(path: string): string {
+export function remotePath(path: string): string {
   if (path.startsWith("~/")) {
     return `"$HOME/${path.slice(2)}"`;
   }
