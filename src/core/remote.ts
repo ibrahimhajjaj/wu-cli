@@ -8,6 +8,17 @@ export function shellEscape(arg: string): string {
   return `'${arg.replace(/'/g, "'\\''")}'`;
 }
 
+// Expand ~ to $HOME for remote shell (single-quoted ~ won't expand)
+function remotePath(path: string): string {
+  if (path.startsWith("~/")) {
+    return `"$HOME/${path.slice(2)}"`;
+  }
+  if (path === "~") {
+    return '"$HOME"';
+  }
+  return shellEscape(path);
+}
+
 // --- SSH connection multiplexing ---
 
 const CONTROL_PATH = "/tmp/wu-ssh-%r@%h:%p";
@@ -61,7 +72,7 @@ export async function sshWuExec(
   wuArgs: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const escaped = wuArgs.map(shellEscape).join(" ");
-  const command = `env WU_HOME=${shellEscape(remote.wu_home)} wu ${escaped}`;
+  const command = `env WU_HOME=${remotePath(remote.wu_home)} wu ${escaped}`;
   return sshRawExec(remote, command);
 }
 
@@ -96,12 +107,11 @@ export async function syncDb(
 
   // Path 2: backup + rsync (fallback)
   const tmpRemote = `/tmp/wu-sync-${Date.now()}.db`;
-  const remoteDbPath = `${remote.wu_home}/wu.db`;
 
-  // Remote backup
+  // Remote backup (use remotePath for tilde expansion)
   const backup = await sshRawExec(
     remote,
-    `sqlite3 ${shellEscape(remoteDbPath)} '.backup ${shellEscape(tmpRemote)}'`,
+    `sqlite3 ${remotePath(remote.wu_home + "/wu.db")} '.backup ${shellEscape(tmpRemote)}'`,
   );
   if (backup.exitCode !== 0) {
     throw new Error(`Remote backup failed: ${backup.stderr}`);
