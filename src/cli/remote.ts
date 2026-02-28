@@ -1,7 +1,7 @@
 import { Command } from "commander";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { loadConfig, saveConfig, WuConfigSchema } from "../config/schema.js";
-import { sshWuExec, sshRawExec, remotePath } from "../core/remote.js";
+import { sshRawExec, sshWuExec, remotePath, shellEscape } from "../core/remote.js";
 import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
 export function registerRemoteCommand(program: Command): void {
@@ -138,29 +138,36 @@ export function registerRemoteCommand(program: Command): void {
           process.exit(EXIT_GENERAL_ERROR);
         }
 
-        // Set default constraint
-        const setDefault = await sshWuExec(remoteConfig, [
-          "config", "set", "constraints.default", config.constraints.default,
-        ]);
-        if (setDefault.exitCode !== 0) {
-          console.error(`Failed to set remote default constraint: ${setDefault.stderr}`);
+        // Read remote config, merge constraints, write back
+        const configPath = remotePath(remoteConfig.wu_home + "/config.yaml");
+        const readResult = await sshRawExec(remoteConfig, `cat ${configPath} 2>/dev/null || echo ""`);
+        let remoteFullConfig;
+        try {
+          const parsed = parseYaml(readResult.stdout);
+          remoteFullConfig = WuConfigSchema.parse(parsed || {});
+        } catch {
+          remoteFullConfig = WuConfigSchema.parse({});
+        }
+
+        // Merge local constraints into remote config
+        remoteFullConfig.constraints = config.constraints;
+
+        // Write back
+        const yaml = stringifyYaml(remoteFullConfig);
+        const writeResult = await sshRawExec(
+          remoteConfig,
+          `cat > ${configPath} << 'WU_EOF'\n${yaml}WU_EOF`,
+        );
+        if (writeResult.exitCode !== 0) {
+          console.error(`Failed to write remote config: ${writeResult.stderr}`);
           process.exit(EXIT_GENERAL_ERROR);
         }
-        console.log(`Pushed default constraint: ${config.constraints.default}`);
 
-        // Set per-chat constraints
+        console.log(`Pushed constraints to remote:`);
+        console.log(`  default: ${config.constraints.default}`);
         for (const [jid, chat] of Object.entries(config.constraints.chats)) {
-          const setChat = await sshWuExec(remoteConfig, [
-            "config", "set", `constraints.chats.${jid}.mode`, chat.mode,
-          ]);
-          if (setChat.exitCode !== 0) {
-            console.error(`Failed to set constraint for ${jid}: ${setChat.stderr}`);
-          } else {
-            console.log(`Pushed constraint: ${jid} = ${chat.mode}`);
-          }
+          console.log(`  ${jid}: ${chat.mode}`);
         }
-
-        console.log("Constraints pushed to remote");
       } else {
         // Pull remote config file directly (wu config show outputs YAML)
         const result = await sshRawExec(remoteConfig, `cat ${remotePath(remoteConfig.wu_home + "/config.yaml")}`);
