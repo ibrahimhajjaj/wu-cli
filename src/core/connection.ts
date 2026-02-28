@@ -57,7 +57,7 @@ export async function createConnection(
     },
     version,
     browser: ["wu-cli", "cli", VERSION],
-    syncFullHistory: false,
+    syncFullHistory: true,
     markOnlineOnConnect: false,
     logger: log as any,
     generateHighQualityLinkPreview: false,
