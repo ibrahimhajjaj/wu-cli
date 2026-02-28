@@ -116,9 +116,59 @@ wu messages search "budget" --chat 120363XXX@g.us --limit 20
 ```bash
 # Run as a foreground daemon — collects messages continuously
 wu daemon
+
+# Install as a systemd service (Linux)
+wu daemon install
+
+# Remove systemd service
+wu daemon uninstall
+
+# View daemon logs
+wu daemon logs
 ```
 
 The daemon auto-reconnects on connection drops, logs health every 5 minutes, and stores all messages to SQLite.
+
+### Remote Sync
+
+Run the daemon on a VPS collecting messages 24/7, query from your local machine. All communication over SSH — no exposed ports, no extra auth.
+
+```bash
+# --- On the VPS ---
+npm i -g @ibrahimwithi/wu-cli
+wu login
+wu daemon install
+
+# --- On your local machine ---
+# Add the remote
+wu remote add vps user@your-vps-ip
+
+# Push your constraints to the server
+wu remote setup vps --push
+
+# Pull the database
+wu sync pull
+
+# Continuous sync every 30s
+wu sync pull --watch --interval 30
+
+# Install as a systemd timer (Linux)
+wu sync install --interval 60
+```
+
+| Command | Description |
+|---|---|
+| `wu remote add <name> <host>` | Add a remote wu instance |
+| `wu remote list` | List configured remotes |
+| `wu remote remove <name>` | Remove a remote |
+| `wu remote default <name>` | Set the default remote |
+| `wu remote setup <name>` | Sync constraints between local and remote |
+| `wu sync pull [name]` | Pull database from remote |
+| `wu sync pull --watch` | Continuously sync on an interval |
+| `wu sync install` | Install systemd timer for periodic sync |
+| `wu sync uninstall` | Remove systemd sync timer |
+
+When a remote is configured and no local daemon is running, `wu mcp` starts in **remote mode** — reads from the local synced DB, routes writes (send, react, etc.) through SSH to the VPS.
 
 ### MCP Server
 
@@ -128,6 +178,14 @@ wu mcp
 ```
 
 Exposes WhatsApp as tools and resources for AI agents via the [Model Context Protocol](https://modelcontextprotocol.io). See [MCP setup guide](docs/mcp-setup.md) for Claude Code, Cursor, Codex CLI, and Gemini CLI configuration.
+
+The MCP server operates in three modes:
+
+| Mode | Condition | Reads | Writes |
+|---|---|---|---|
+| Full local | No daemon running, no remote | WhatsApp (live) | WhatsApp (live) |
+| Read-only | Local daemon running | SQLite | Disabled |
+| Remote | Remote configured + synced DB | Local SQLite | SSH to remote |
 
 ### Configuration
 
@@ -195,6 +253,12 @@ constraints:
       mode: read
     "120363XXX@g.us":
       mode: full
+
+remotes:
+  vps:
+    host: user@your-vps-ip
+    wu_home: ~/.wu
+default_remote: vps
 
 db:
   path: ~/.wu/wu.db        # SQLite database path

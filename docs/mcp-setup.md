@@ -130,10 +130,22 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | `wu://groups/{jid}` | Single group with participants |
 | `wu://status` | Connection status |
 
+## Operating Modes
+
+The MCP server operates in three modes, detected automatically:
+
+| Mode | Condition | Reads | Writes |
+|---|---|---|---|
+| **Full local** | No daemon running, no remote | WhatsApp (live) | WhatsApp (live) |
+| **Read-only** | Local daemon running | SQLite | Disabled |
+| **Remote** | Remote configured + synced DB | Local SQLite | SSH to remote |
+
+In remote mode, write tools (`wu_messages_send`, `wu_react`, `wu_groups_create`, etc.) are routed through SSH to the VPS daemon. Read tools always query the local SQLite database. See [Remote Sync](getting-started.md#remote-sync-vps-setup) for setup.
+
 ## Prerequisites
 
 Before using `wu mcp`, make sure you've:
 
 1. Installed wu: `npm install -g @ibrahimwithi/wu-cli`
-2. Logged in: `wu login`
+2. Logged in: `wu login` (or set up a [remote](getting-started.md#remote-sync-vps-setup) with `wu remote add`)
 3. Configured constraints for the chats you want the AI to access (see [Getting Started](getting-started.md#step-2-configure-constraints))

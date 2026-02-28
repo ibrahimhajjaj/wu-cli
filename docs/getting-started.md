@@ -146,7 +146,27 @@ The daemon:
 - Logs health metrics every 5 minutes
 - Acquires a lock file to prevent conflicts
 
-For running as a systemd service, see `wu-daemon.service` in the project root.
+#### Systemd service (Linux)
+
+Install the daemon as a systemd user service so it survives logout and starts on boot:
+
+```bash
+wu daemon install
+```
+
+This creates `~/.config/systemd/user/wu.service`, enables and starts it. If linger is not enabled, the daemon stops when you log out — fix with:
+
+```bash
+sudo loginctl enable-linger $(whoami)
+```
+
+Other daemon management commands:
+
+```bash
+wu daemon logs         # View live logs (journalctl)
+wu daemon uninstall    # Remove the service
+systemctl --user status wu   # Check status
+```
 
 ## Step 4: Query Your Data
 
@@ -204,6 +224,96 @@ This starts a stdio-based MCP server that exposes tools (send messages, search, 
 
 For setup instructions with **Claude Code**, **Cursor**, **Codex CLI**, and **Gemini CLI**, see the [MCP setup guide](mcp-setup.md).
 
+## Remote Sync (VPS Setup)
+
+Run the daemon on a VPS collecting messages 24/7, query from your local machine. All communication goes through SSH — no exposed ports, no extra auth layer.
+
+### On the VPS
+
+```bash
+# Install wu
+npm install -g @ibrahimwithi/wu-cli
+
+# Login
+wu login
+
+# Set up constraints (collect everything read-only)
+wu config default read
+
+# Install as a systemd service
+wu daemon install
+
+# Enable linger so it survives logout
+sudo loginctl enable-linger $(whoami)
+
+# Verify
+systemctl --user status wu
+wu status --json   # should show daemon_running: true
+```
+
+### On your local machine
+
+```bash
+# Add the remote (tests SSH connectivity + verifies wu is installed)
+wu remote add vps user@your-vps-ip
+
+# Or push your local constraints to the server
+wu remote setup vps --push
+
+# Pull the database
+wu sync pull
+
+# Verify
+wu chats list
+wu messages search "hello"
+```
+
+### Continuous sync
+
+```bash
+# Sync every 30 seconds (foreground, Ctrl+C to stop)
+wu sync pull --watch --interval 30
+
+# Or install as a systemd timer (Linux)
+wu sync install --interval 60
+wu sync uninstall   # remove the timer
+```
+
+### MCP in remote mode
+
+When a remote is configured and no local daemon is running, `wu mcp` automatically starts in remote mode:
+- **Reads** come from your local synced SQLite database (fast)
+- **Writes** (send, react, etc.) are routed through SSH to the VPS
+
+```bash
+wu mcp
+# stderr: wu-mcp: Remote mode (vps) — local reads, SSH writes
+```
+
+### Syncing constraints
+
+Use `wu remote setup` to sync constraints between local and remote:
+
+```bash
+# Push local constraints to remote
+wu remote setup vps --push
+
+# Pull remote constraints to local
+wu remote setup vps --pull
+
+# Auto-detect: pushes if local has constraints, pulls otherwise
+wu remote setup vps
+```
+
+### Managing remotes
+
+```bash
+wu remote list                # List all remotes (* = default)
+wu remote add prod user@host  # Add another remote
+wu remote default prod        # Switch default
+wu remote remove vps          # Remove a remote
+```
+
 ## File Locations
 
 | Path | Purpose |
@@ -225,4 +335,3 @@ WU_HOME=/custom/path wu listen
 - Run `wu --help` or `wu <command> --help` for full command reference
 - See the [README](../README.md) for the complete command table and constraint reference
 - See the [MCP setup guide](mcp-setup.md) for connecting wu to AI tools
-- Check `wu-daemon.service` in the project root for systemd service setup
