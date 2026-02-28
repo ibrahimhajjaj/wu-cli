@@ -18,6 +18,8 @@ import { registerListenCommand } from "./listen.js";
 import { registerDaemonCommand } from "./daemon.js";
 import { registerDbCommand } from "./db.js";
 import { registerMcpCommand } from "./mcp.js";
+import { registerRemoteCommand } from "./remote.js";
+import { registerSyncCommand } from "./sync.js";
 import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
 const program = new Command();
@@ -42,6 +44,8 @@ registerListenCommand(program);
 registerDaemonCommand(program);
 registerDbCommand(program);
 registerMcpCommand(program);
+registerRemoteCommand(program);
+registerSyncCommand(program);
 
 try {
   await program.parseAsync(process.argv);

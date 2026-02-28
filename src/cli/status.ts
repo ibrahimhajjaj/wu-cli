@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import { AUTH_DIR } from "../config/paths.js";
+import { isLocked } from "../core/lock.js";
 import { EXIT_NOT_AUTHENTICATED } from "./exit-codes.js";
 
 export function registerStatusCommand(program: Command): void {
@@ -22,8 +23,10 @@ export function registerStatusCommand(program: Command): void {
 
       try {
         const creds = JSON.parse(readFileSync(credsPath, "utf-8"));
+        const { locked } = isLocked();
         const info = {
           authenticated: true,
+          daemon_running: locked,
           phone: creds.me?.id?.split(":")[0] || creds.me?.id || "unknown",
           name: creds.me?.name || "unknown",
           platform: creds.platform || "unknown",

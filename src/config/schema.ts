@@ -31,11 +31,19 @@ const LogConfig = z.object({
   level: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
+const RemoteConfig = z.object({
+  host: z.string(),
+  wu_home: z.string().default("~/.wu"),
+});
+export type RemoteConfig = z.infer<typeof RemoteConfig>;
+
 export const WuConfigSchema = z.object({
   whatsapp: WhatsAppConfig.default({}),
   constraints: ConstraintsConfig.optional(),
   db: DbConfig.default({}),
   log: LogConfig.default({}),
+  remotes: z.record(z.string(), RemoteConfig).optional(),
+  default_remote: z.string().optional(),
 });
 
 export type WuConfig = z.infer<typeof WuConfigSchema>;

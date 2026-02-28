@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WASocket } from "@whiskeysockets/baileys";
-import type { WuConfig } from "../config/schema.js";
+import type { WuConfig, RemoteConfig } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import { existsSync, unlinkSync } from "fs";
@@ -13,8 +13,9 @@ import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteC
 import {
   listChats, listMessages, searchMessages, searchChats,
   listContacts, searchContacts, getGroupParticipants,
-  getMessageCount,
+  getMessageCount, upsertMessage,
 } from "../core/store.js";
+import { sshWuExec } from "../core/remote.js";
 
 function jsonResult(data: unknown) {
   return {
@@ -32,7 +33,8 @@ function errorResult(message: string) {
 export function registerTools(
   server: McpServer,
   getSock: () => WASocket | undefined,
-  config: WuConfig
+  config: WuConfig,
+  remote?: { name: string; remote: RemoteConfig },
 ): void {
   // --- wu_messages_send ---
   server.tool(
@@ -47,26 +49,65 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
-
-      try {
-        let result;
-        if (params.media_path) {
-          result = await sendMedia(sock, params.to, params.media_path, config, {
-            caption: params.caption || params.message,
-            replyTo: params.reply_to,
-          });
-        } else if (params.message) {
-          result = await sendText(sock, params.to, params.message, config, {
-            replyTo: params.reply_to,
-          });
-        } else {
-          return errorResult("Provide message or media_path");
+      if (sock) {
+        try {
+          let result;
+          if (params.media_path) {
+            result = await sendMedia(sock, params.to, params.media_path, config, {
+              caption: params.caption || params.message,
+              replyTo: params.reply_to,
+            });
+          } else if (params.message) {
+            result = await sendText(sock, params.to, params.message, config, {
+              replyTo: params.reply_to,
+            });
+          } else {
+            return errorResult("Provide message or media_path");
+          }
+          return jsonResult({ id: result?.key?.id, timestamp: result?.messageTimestamp });
+        } catch (err) {
+          return errorResult((err as Error).message);
         }
-        return jsonResult({ id: result?.key?.id, timestamp: result?.messageTimestamp });
-      } catch (err) {
-        return errorResult((err as Error).message);
       }
+
+      if (remote) {
+        try {
+          const args = ["messages", "send", params.to];
+          if (params.message) args.push(params.message);
+          if (params.media_path) args.push("--media", params.media_path);
+          if (params.caption) args.push("--caption", params.caption);
+          if (params.reply_to) args.push("--reply-to", params.reply_to);
+          args.push("--json");
+
+          const sshResult = await sshWuExec(remote.remote, args);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote send failed: ${sshResult.stderr}`);
+          }
+          const sent = JSON.parse(sshResult.stdout);
+
+          // Inject into local DB for write-read consistency
+          upsertMessage({
+            id: sent.id,
+            chat_jid: params.to,
+            sender_jid: null,
+            sender_name: null,
+            body: params.message || null,
+            type: "text",
+            media_mime: null, media_path: null, media_size: null,
+            quoted_id: params.reply_to || null,
+            location_lat: null, location_lon: null, location_name: null,
+            is_from_me: 1,
+            timestamp: sent.timestamp || Math.floor(Date.now() / 1000),
+            raw: null,
+          });
+
+          return jsonResult(sent);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
@@ -81,14 +122,30 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
-
-      try {
-        await sendReaction(sock, params.chat, params.message_id, params.emoji, config);
-        return jsonResult({ success: true });
-      } catch (err) {
-        return errorResult((err as Error).message);
+      if (sock) {
+        try {
+          await sendReaction(sock, params.chat, params.message_id, params.emoji, config);
+          return jsonResult({ success: true });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
       }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "messages", "react", params.chat, params.message_id, params.emoji,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote react failed: ${sshResult.stderr}`);
+          }
+          return jsonResult({ success: true });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
@@ -102,7 +159,7 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
+      if (!sock) return errorResult("Not connected to WhatsApp (media download requires local connection)");
 
       try {
         const result = await downloadMedia(
@@ -128,19 +185,35 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
-
-      try {
-        const result = await createGroup(
-          sock,
-          params.name,
-          params.participants,
-          config
-        );
-        return jsonResult({ id: result.id, name: result.subject });
-      } catch (err) {
-        return errorResult((err as Error).message);
+      if (sock) {
+        try {
+          const result = await createGroup(
+            sock,
+            params.name,
+            params.participants,
+            config
+          );
+          return jsonResult({ id: result.id, name: result.subject });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
       }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "groups", "create", params.name, ...params.participants,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote group create failed: ${sshResult.stderr}`);
+          }
+          return jsonResult(JSON.parse(sshResult.stdout));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
@@ -153,14 +226,30 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
-
-      try {
-        await leaveGroup(sock, params.jid, config);
-        return jsonResult({ success: true });
-      } catch (err) {
-        return errorResult((err as Error).message);
+      if (sock) {
+        try {
+          await leaveGroup(sock, params.jid, config);
+          return jsonResult({ success: true });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
       }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "groups", "leave", params.jid,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote group leave failed: ${sshResult.stderr}`);
+          }
+          return jsonResult({ success: true });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
@@ -284,6 +373,7 @@ export function registerTools(
       const sock = getSock();
       return jsonResult({
         connected: sock ? (sock.ws as any)?.isOpen ?? false : false,
+        remote_mode: !!remote,
         messages_stored: getMessageCount(),
         timestamp: Date.now(),
       });
@@ -428,13 +518,33 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp");
-      try {
-        const code = await getInviteCode(sock, params.jid, config);
-        return jsonResult({ link: `https://chat.whatsapp.com/${code}` });
-      } catch (err) {
-        return errorResult((err as Error).message);
+      if (sock) {
+        try {
+          const code = await getInviteCode(sock, params.jid, config);
+          return jsonResult({ link: `https://chat.whatsapp.com/${code}` });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
       }
+
+      if (remote) {
+        try {
+          const sshResult = await sshWuExec(remote.remote, [
+            "groups", "invite", params.jid,
+          ]);
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote invite failed: ${sshResult.stderr}`);
+          }
+          // Parse invite code from output
+          const match = sshResult.stdout.match(/https:\/\/chat\.whatsapp\.com\/\S+/);
+          if (match) return jsonResult({ link: match[0] });
+          return jsonResult({ output: sshResult.stdout.trim() });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
