@@ -15,8 +15,10 @@ import {
   listChats, listMessages, searchMessages, searchChats,
   listContacts, searchContacts, getGroupParticipants,
   getMessageCount, getMessageContext, upsertMessage,
+  getFilteredMessageCount,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
+import { exportMessages } from "../core/export.js";
 import { sshWuExec, syncDb } from "../core/remote.js";
 
 function jsonResult(data: unknown) {
@@ -266,6 +268,8 @@ export function registerTools(
       chat: z.string().optional().describe("Filter by chat JID"),
       from: z.string().optional().describe("Filter by sender JID"),
       limit: z.number().optional().default(50).describe("Max results"),
+      after: z.number().optional().describe("After timestamp (unix) — only return matches newer than this"),
+      before: z.number().optional().describe("Before timestamp (unix) — only return matches older than this"),
     },
     async (params) => {
       try {
@@ -274,6 +278,8 @@ export function registerTools(
           chatJid: params.chat,
           senderJid: params.from,
           limit: 10000,
+          after: params.after,
+          before: params.before,
         });
         const results = allResults.filter((r) => shouldCollect(r.chat_jid, cfg)).slice(0, params.limit);
         return jsonResult(
@@ -583,6 +589,62 @@ export function registerTools(
           before: result.before.map(fmt),
           after: result.after.map(fmt),
         });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_messages_count ---
+  server.tool(
+    "wu_messages_count",
+    "Get the count of messages matching filters (lightweight, no message data returned). Useful for planning pagination or checking volume before export.",
+    {
+      chat: z.string().optional().describe("Filter by chat JID"),
+      after: z.number().optional().describe("After timestamp (unix)"),
+      before: z.number().optional().describe("Before timestamp (unix)"),
+    },
+    async (params) => {
+      try {
+        const count = getFilteredMessageCount({
+          chatJid: params.chat,
+          after: params.after,
+          before: params.before,
+        });
+        return jsonResult({ count });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_messages_export ---
+  server.tool(
+    "wu_messages_export",
+    "Export messages from a chat to a file on disk. Handles pagination internally — no message limit. Returns a summary (count, file path, size) instead of message data, keeping the LLM context window clean.",
+    {
+      chat: z.string().describe("Chat JID"),
+      after: z.number().optional().describe("After timestamp (unix)"),
+      before: z.number().optional().describe("Before timestamp (unix)"),
+      format: z.enum(["jsonl", "json", "markdown", "csv"]).optional().default("jsonl").describe("Output format"),
+      output: z.string().describe("File path to write to"),
+      exclude_reactions: z.boolean().optional().default(false).describe("Skip reaction messages"),
+    },
+    async (params) => {
+      const cfg = loadConfig();
+      if (!shouldCollect(params.chat, cfg)) {
+        return errorResult(`Chat ${params.chat} is blocked by constraints`);
+      }
+      try {
+        const result = exportMessages({
+          chatJid: params.chat,
+          after: params.after,
+          before: params.before,
+          format: params.format,
+          output: params.output,
+          excludeReactions: params.exclude_reactions,
+        });
+        return jsonResult(result);
       } catch (err) {
         return errorResult((err as Error).message);
       }

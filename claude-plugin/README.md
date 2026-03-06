@@ -34,6 +34,8 @@ Or from inside Claude Code:
 | `/wu-status` | Check connection status |
 | `/wu-context <message-id>` | Get surrounding messages for context |
 | `/wu-backfill <jid>` | Backfill older message history |
+| `/wu-export <jid>` | Export WhatsApp messages to a file |
+| `/wu-count <jid>` | Count messages in a chat |
 
 ## How It Works
 

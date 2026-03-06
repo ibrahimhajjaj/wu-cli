@@ -67,6 +67,7 @@ wu listen
 | `wu messages send <jid> [text]` | Send text, media, or poll |
 | `wu messages react <jid> <id> <emoji>` | React to a message |
 | `wu messages delete <jid> <id>` | Delete a message for everyone |
+| `wu messages export <jid>` | Export messages to a file (jsonl/json/markdown/csv) |
 
 ```bash
 # Send with media
@@ -83,6 +84,12 @@ wu messages search "budget" --chat 120363XXX@g.us --limit 20
 
 # Download all undownloaded media in a chat
 wu media download-batch 120363XXX@g.us --limit 50 --concurrency 4
+
+# Export all messages since a timestamp to a file
+wu messages export 120363XXX@g.us --after 1772548621 --format jsonl --output data/export.jsonl
+
+# Export as readable markdown
+wu messages export 120363XXX@g.us --format markdown --output data/chat.md
 ```
 
 ### Chats & Contacts
@@ -305,7 +312,7 @@ wu messages list 120363XXX@g.us --json --limit 1000
 
 When running `wu mcp`, the following are available to AI agents:
 
-**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
+**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 

@@ -98,9 +98,11 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | Tool | Description |
 |---|---|
 | `wu_messages_send` | Send a text or media message |
-| `wu_messages_search` | Full-text search messages (FTS5 ranked with snippets) |
+| `wu_messages_search` | Full-text search messages (FTS5 ranked, supports date range filtering) |
 | `wu_messages_list` | List messages in a chat |
 | `wu_messages_context` | Get surrounding messages before/after a specific message |
+| `wu_messages_count` | Get message count matching filters (chat, date range) |
+| `wu_messages_export` | Export messages to a file (jsonl/json/markdown/csv) |
 | `wu_react` | React to a message with an emoji |
 | `wu_media_download` | Download media from a message |
 | `wu_media_download_batch` | Download multiple media files in parallel |

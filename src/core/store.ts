@@ -268,7 +268,7 @@ function canUseFts(db: Database.Database): boolean {
 
 export function searchMessages(
   query: string,
-  opts?: { chatJid?: string; senderJid?: string; limit?: number }
+  opts?: { chatJid?: string; senderJid?: string; limit?: number; after?: number; before?: number }
 ): SearchResult[] {
   const db = getDb();
   const limit = opts?.limit || 50;
@@ -286,6 +286,14 @@ export function searchMessages(
     if (opts?.senderJid) {
       chatFilter += " AND m.sender_jid = ?";
       params.push(opts.senderJid);
+    }
+    if (opts?.after) {
+      chatFilter += " AND m.timestamp > ?";
+      params.push(opts.after);
+    }
+    if (opts?.before) {
+      chatFilter += " AND m.timestamp < ?";
+      params.push(opts.before);
     }
     params.push(limit);
 
@@ -311,6 +319,14 @@ export function searchMessages(
   if (opts?.senderJid) {
     conditions.push("sender_jid = ?");
     params.push(opts.senderJid);
+  }
+  if (opts?.after) {
+    conditions.push("timestamp > ?");
+    params.push(opts.after);
+  }
+  if (opts?.before) {
+    conditions.push("timestamp < ?");
+    params.push(opts.before);
   }
   params.push(limit);
   const rows = db
@@ -380,6 +396,31 @@ export function getMessageCount(): number {
   const row = db.prepare("SELECT COUNT(*) as count FROM messages").get() as {
     count: number;
   };
+  return row.count;
+}
+
+export function getFilteredMessageCount(opts?: {
+  chatJid?: string;
+  after?: number;
+  before?: number;
+}): number {
+  const db = getDb();
+  const conditions: string[] = [];
+  const params: unknown[] = [];
+  if (opts?.chatJid) {
+    conditions.push("chat_jid = ?");
+    params.push(opts.chatJid);
+  }
+  if (opts?.after) {
+    conditions.push("timestamp > ?");
+    params.push(opts.after);
+  }
+  if (opts?.before) {
+    conditions.push("timestamp < ?");
+    params.push(opts.before);
+  }
+  const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+  const row = db.prepare(`SELECT COUNT(*) as count FROM messages${where}`).get(...params) as { count: number };
   return row.count;
 }
 
