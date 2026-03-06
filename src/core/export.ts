@@ -1,6 +1,6 @@
 import { getDb } from "../db/database.js";
 import type { MessageRow } from "./store.js";
-import { createWriteStream, mkdirSync, statSync } from "fs";
+import { writeFileSync, mkdirSync, statSync, openSync, writeSync, closeSync } from "fs";
 import { dirname } from "path";
 
 export interface ExportOptions {
@@ -66,17 +66,18 @@ export function exportMessages(opts: ExportOptions): ExportResult {
   const countRow = db.prepare(`SELECT COUNT(*) as count FROM messages WHERE ${where}`).get(...params) as { count: number };
   const total = countRow.count;
 
+  // Helper: synchronous write to fd
+  const fd = openSync(opts.output, "w");
+  const w = (s: string) => writeSync(fd, s);
+
   if (total === 0) {
-    // Write empty file
-    const ws = createWriteStream(opts.output);
-    if (format === "json") ws.write("[]");
-    if (format === "csv") ws.write("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
-    ws.end();
+    if (format === "json") w("[]");
+    if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
+    closeSync(fd);
     return { messages_exported: 0, file: opts.output, oldest: null, newest: null, file_size: "0B" };
   }
 
-  // Stream write in batches using cursor-based pagination
-  const ws = createWriteStream(opts.output);
+  // Write in batches using cursor-based pagination
   let exported = 0;
   let oldest: number | null = null;
   let newest: number | null = null;
@@ -84,10 +85,10 @@ export function exportMessages(opts: ExportOptions): ExportResult {
   let lastRowid = 0;
   let isFirst = true;
 
-  if (format === "json") ws.write("[\n");
-  if (format === "csv") ws.write("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
+  if (format === "json") w("[\n");
+  if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
   if (format === "markdown") {
-    ws.write(`# Messages Export\n\n`);
+    w(`# Messages Export\n\n`);
   }
 
   // Use rowid-based cursor pagination for efficiency
@@ -113,7 +114,7 @@ export function exportMessages(opts: ExportOptions): ExportResult {
 
       switch (format) {
         case "jsonl":
-          ws.write(JSON.stringify({
+          w(JSON.stringify({
             id: row.id,
             chat_jid: row.chat_jid,
             sender_jid: row.sender_jid,
@@ -129,8 +130,8 @@ export function exportMessages(opts: ExportOptions): ExportResult {
           break;
 
         case "json":
-          if (!isFirst) ws.write(",\n");
-          ws.write(JSON.stringify({
+          if (!isFirst) w(",\n");
+          w(JSON.stringify({
             id: row.id,
             chat_jid: row.chat_jid,
             sender_jid: row.sender_jid,
@@ -150,22 +151,22 @@ export function exportMessages(opts: ExportOptions): ExportResult {
           const dayStr = date.toISOString().split("T")[0];
           if (dayStr !== currentDay) {
             currentDay = dayStr;
-            ws.write(`\n## ${dayStr}\n\n`);
+            w(`\n## ${dayStr}\n\n`);
           }
           const time = date.toTimeString().slice(0, 5);
           const sender = row.sender_name || row.sender_jid || (row.is_from_me ? "Me" : "Unknown");
           if (row.body) {
-            ws.write(`### ${time} — ${sender}\n${row.body}\n\n`);
+            w(`### ${time} — ${sender}\n${row.body}\n\n`);
           } else if (row.media_mime) {
-            ws.write(`### ${time} — ${sender}\n(media: ${row.type}, mime: ${row.media_mime})\n\n`);
+            w(`### ${time} — ${sender}\n(media: ${row.type}, mime: ${row.media_mime})\n\n`);
           } else {
-            ws.write(`### ${time} — ${sender}\n(${row.type})\n\n`);
+            w(`### ${time} — ${sender}\n(${row.type})\n\n`);
           }
           break;
         }
 
         case "csv":
-          ws.write([
+          w([
             escapeCSV(row.id),
             escapeCSV(row.chat_jid),
             escapeCSV(row.sender_jid),
@@ -187,8 +188,8 @@ export function exportMessages(opts: ExportOptions): ExportResult {
     batch = nextBatchStmt.all(...params, lastTimestamp, lastTimestamp, lastRowid, batchSize) as (MessageRow & { rowid: number })[];
   }
 
-  if (format === "json") ws.write("\n]");
-  ws.end();
+  if (format === "json") w("\n]");
+  closeSync(fd);
 
   // Get file size
   const stat = statSync(opts.output);
