@@ -1,6 +1,6 @@
 {
   "name": "@ibrahimwithi/wu-cli",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "type": "module",
   "description": "WhatsApp CLI tool — like gh is to GitHub, wu is to WhatsApp",
   "author": "Ibrahim Hajjaj",
@@ -23,6 +23,12 @@
   "files": [
     "dist"
   ],
+  "exports": {
+    ".": "./dist/lib.js",
+    "./core/*": "./dist/core/*.js",
+    "./db/*": "./dist/db/*.js",
+    "./config/*": "./dist/config/*.js"
+  },
   "scripts": {
     "build": "tsc && chmod +x dist/cli/index.js",
     "dev": "tsx src/cli/index.ts",

@@ -173,3 +173,7 @@ export async function deleteForEveryone(
   logger.debug({ jid, msgId, fromMe }, "Deleting message");
   return sock.sendMessage(jid, { delete: key });
 }
+
+export async function sendTypingIndicator(sock: WASocket, jid: string, composing: boolean): Promise<void> {
+  await sock.sendPresenceUpdate(composing ? 'composing' : 'paused', jid);
+}
