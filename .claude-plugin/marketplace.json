@@ -1,0 +1,13 @@
+{
+  "name": "wu-cli",
+  "owner": {
+    "name": "Ibrahim Hajjaj"
+  },
+  "plugins": [
+    {
+      "name": "wu-whatsapp",
+      "source": "./claude-plugin",
+      "description": "WhatsApp integration for Claude Code — send messages, search chats, manage groups via wu-cli"
+    }
+  ]
+}
