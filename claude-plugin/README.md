@@ -4,15 +4,11 @@ WhatsApp integration for Claude Code. Send messages, search chats, list contacts
 
 ## Install
 
-```bash
-# Clone the repo and point Claude Code to the plugin directory
-git clone https://github.com/ibrahimhajjaj/wu-cli.git
-claude --plugin-dir ./wu-cli/claude-plugin
-```
+From inside Claude Code:
 
-Or from inside Claude Code:
 ```
-/plugin install wu-whatsapp
+/plugin marketplace add ibrahimhajjaj/wu-cli
+/plugin install wu-whatsapp@wu-cli
 ```
 
 ## Prerequisites
