@@ -108,7 +108,7 @@ WhatsApp identifies chats by JID (Jabber ID):
 - **DMs:** `1234567890@s.whatsapp.net` (phone number without `+`)
 - **Wildcards:** `*@g.us` (all groups), `*@s.whatsapp.net` (all DMs)
 
-To find JIDs, use `wu groups list --live` or `wu chats list` after collecting some messages.
+To find JIDs, run `wu groups list`. It shows every group you're in (and which community each subgroup belongs to) regardless of your constraint setting, so you can see what's available before opting in. Use `wu dms list --all` to see DM JIDs you haven't allowed yet. `wu groups list --live` refreshes the cache from WhatsApp directly.
 
 ## Step 3: Collect Messages
 

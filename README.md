@@ -106,8 +106,9 @@ wu messages export 120363XXX@g.us --format markdown --output data/chat.md
 
 | Command | Description |
 |---|---|
-| `wu groups list` | List groups (cached) |
-| `wu groups list --live` | Fetch groups from WhatsApp |
+| `wu groups list` | List groups with community tree and constraint status |
+| `wu groups list --live` | Fetch from WhatsApp and refresh community linkage |
+| `wu groups list --allowed-only` | Skip groups whose constraint is `none` |
 | `wu groups info <jid>` | Show group details and participants |
 | `wu groups create <name> [jids...]` | Create a new group |
 | `wu groups invite <jid>` | Get invite link |
@@ -115,6 +116,25 @@ wu messages export 120363XXX@g.us --format markdown --output data/chat.md
 | `wu groups rename <jid> <name>` | Rename a group |
 | `wu groups join <code-or-url>` | Join a group by invite code or URL |
 | `wu groups participants <jid>` | List group participants |
+
+By default `wu groups list` shows every group you're in (jid + name + community shape) so you can see what's there before opting in. Description, full participant list, and messages stay constraint-gated. Set `whatsapp.group_discovery: false` in the config to revert to the old behavior where group metadata is only stored when the constraint allows.
+
+### Communities
+
+| Command | Description |
+|---|---|
+| `wu communities list` | List WhatsApp Communities (parent groups) |
+| `wu communities list --with-subgroups` | Include linked subgroups under each parent |
+
+### Direct messages (DMs)
+
+| Command | Description |
+|---|---|
+| `wu dms list` | List 1:1 chats you've opted into |
+| `wu dms list --all` | Include DMs blocked by constraints |
+| `wu dms search <query>` | Search 1:1 chats by name |
+
+DM JIDs contain the contact's phone number, so they're always constraint-gated regardless of `group_discovery`.
 
 ### Media
 
@@ -272,6 +292,10 @@ whatsapp:
   read_receipts: false     # Send read receipts (default: false)
   media_max_mb: 50         # Max media auto-download size in MB
   send_delay_ms: 1000      # Delay before sending messages (ms)
+  group_discovery: true    # Cache group metadata even when constraint is 'none'
+                           # (jid + name + community shape only; descriptions
+                           # and participants stay constraint-gated). Set to
+                           # false for strict mode.
 
 constraints:
   default: none            # Default constraint mode
@@ -312,7 +336,7 @@ wu messages list 120363XXX@g.us --json --limit 1000
 
 When running `wu mcp`, the following are available to AI agents:
 
-**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
+**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_dms_list`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_communities_list`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 

@@ -40,6 +40,10 @@ export interface ChatRow {
   participant_count: number | null;
   description: string | null;
   last_message_at: number | null;
+  last_seen_at: number | null;
+  is_community: number;
+  is_community_announce: number;
+  linked_parent: string | null;
   updated_at: number;
 }
 
@@ -108,18 +112,39 @@ export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
   `).run(row);
 }
 
-export function upsertChat(row: Omit<ChatRow, "updated_at">): void {
+export type ChatUpsert = Omit<
+  ChatRow,
+  "updated_at" | "last_seen_at" | "is_community" | "is_community_announce" | "linked_parent"
+> & {
+  last_seen_at?: number | null;
+  is_community?: number | null;
+  is_community_announce?: number | null;
+  linked_parent?: string | null;
+};
+
+export function upsertChat(row: ChatUpsert): void {
   const db = getDb();
+  const params = {
+    last_seen_at: null,
+    is_community: null,
+    is_community_announce: null,
+    linked_parent: null,
+    ...row,
+  };
   db.prepare(`
-    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at)
-    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at)
+    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at, last_seen_at, is_community, is_community_announce, linked_parent)
+    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at, @last_seen_at, @is_community, @is_community_announce, @linked_parent)
     ON CONFLICT(jid) DO UPDATE SET
       name = COALESCE(excluded.name, chats.name),
       participant_count = COALESCE(excluded.participant_count, chats.participant_count),
       description = COALESCE(excluded.description, chats.description),
       last_message_at = MAX(COALESCE(excluded.last_message_at, 0), COALESCE(chats.last_message_at, 0)),
+      last_seen_at = MAX(COALESCE(excluded.last_seen_at, 0), COALESCE(chats.last_seen_at, 0)),
+      is_community = COALESCE(excluded.is_community, chats.is_community),
+      is_community_announce = COALESCE(excluded.is_community_announce, chats.is_community_announce),
+      linked_parent = COALESCE(excluded.linked_parent, chats.linked_parent),
       updated_at = unixepoch()
-  `).run(row);
+  `).run(params);
 }
 
 export function upsertContact(row: Omit<ContactRow, "updated_at">): void {
@@ -180,22 +205,32 @@ export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void
   })();
 }
 
-export function bulkUpsertChats(rows: Omit<ChatRow, "updated_at">[]): void {
+export function bulkUpsertChats(rows: ChatUpsert[]): void {
   if (rows.length === 0) return;
   const db = getDb();
   const stmt = db.prepare(`
-    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at)
-    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at)
+    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at, last_seen_at, is_community, is_community_announce, linked_parent)
+    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at, @last_seen_at, @is_community, @is_community_announce, @linked_parent)
     ON CONFLICT(jid) DO UPDATE SET
       name = COALESCE(excluded.name, chats.name),
       participant_count = COALESCE(excluded.participant_count, chats.participant_count),
       description = COALESCE(excluded.description, chats.description),
       last_message_at = MAX(COALESCE(excluded.last_message_at, 0), COALESCE(chats.last_message_at, 0)),
+      last_seen_at = MAX(COALESCE(excluded.last_seen_at, 0), COALESCE(chats.last_seen_at, 0)),
+      is_community = COALESCE(excluded.is_community, chats.is_community),
+      is_community_announce = COALESCE(excluded.is_community_announce, chats.is_community_announce),
+      linked_parent = COALESCE(excluded.linked_parent, chats.linked_parent),
       updated_at = unixepoch()
   `);
   db.transaction(() => {
     for (const row of rows) {
-      stmt.run(row);
+      stmt.run({
+        last_seen_at: null,
+        is_community: null,
+        is_community_announce: null,
+        linked_parent: null,
+        ...row,
+      });
     }
   })();
 }
@@ -350,6 +385,33 @@ export function listChats(opts?: { limit?: number }): ChatRow[] {
   return db
     .prepare(
       "SELECT * FROM chats ORDER BY last_message_at DESC NULLS LAST LIMIT ?"
+    )
+    .all(opts?.limit || 100) as ChatRow[];
+}
+
+export function listGroups(opts?: { limit?: number }): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      "SELECT * FROM chats WHERE type = 'group' ORDER BY is_community DESC, COALESCE(name, jid) ASC LIMIT ?"
+    )
+    .all(opts?.limit || 1000) as ChatRow[];
+}
+
+export function listCommunities(opts?: { limit?: number }): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      "SELECT * FROM chats WHERE type = 'group' AND is_community = 1 ORDER BY COALESCE(name, jid) ASC LIMIT ?"
+    )
+    .all(opts?.limit || 100) as ChatRow[];
+}
+
+export function listDms(opts?: { limit?: number }): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      "SELECT * FROM chats WHERE type = 'dm' ORDER BY last_message_at DESC NULLS LAST LIMIT ?"
     )
     .all(opts?.limit || 100) as ChatRow[];
 }

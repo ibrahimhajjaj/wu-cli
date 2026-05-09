@@ -21,6 +21,12 @@ const WhatsAppConfig = z.object({
   media_max_mb: z.number().default(50),
   media_dir: z.string().optional(),
   send_delay_ms: z.number().default(1000),
+  // When true (default), group metadata (jid + name + community shape) is cached
+  // unconditionally so users can discover groups to opt into. Set to false for
+  // strict mode: group metadata only stored when the constraint allows.
+  // DMs are always constraint-gated regardless of this flag because DM JIDs
+  // contain the contact's phone number.
+  group_discovery: z.boolean().default(true),
 });
 
 const DbConfig = z.object({

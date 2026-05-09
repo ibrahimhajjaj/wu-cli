@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -60,8 +60,15 @@ CREATE TABLE IF NOT EXISTS chats (
     participant_count INTEGER,
     description TEXT,
     last_message_at INTEGER,
+    last_seen_at INTEGER,
+    is_community INTEGER DEFAULT 0,
+    is_community_announce INTEGER DEFAULT 0,
+    linked_parent TEXT,
     updated_at INTEGER DEFAULT (unixepoch())
 );
+
+CREATE INDEX IF NOT EXISTS idx_chats_linked_parent ON chats(linked_parent) WHERE linked_parent IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_chats_type ON chats(type);
 
 CREATE TABLE IF NOT EXISTS contacts (
     jid TEXT PRIMARY KEY,

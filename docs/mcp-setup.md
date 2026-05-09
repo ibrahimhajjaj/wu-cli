@@ -107,9 +107,11 @@ Or add to `.gemini/settings.json` in your project root (or `~/.gemini/settings.j
 | `wu_history_backfill` | Request older message history from WhatsApp |
 | `wu_chats_list` | List all chats |
 | `wu_chats_search` | Search chats by name |
+| `wu_dms_list` | List 1:1 chats (constraint-gated) |
 | `wu_contacts_list` | List all contacts |
 | `wu_contacts_search` | Search contacts by name or phone |
-| `wu_groups_list` | List groups (cached or live) |
+| `wu_groups_list` | List groups with community linkage and constraint state |
+| `wu_communities_list` | List communities with optional subgroups |
 | `wu_groups_info` | Group details and participants |
 | `wu_groups_invite` | Get group invite link |
 | `wu_groups_create` | Create a new group |

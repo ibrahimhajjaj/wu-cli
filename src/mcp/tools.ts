@@ -376,16 +376,76 @@ export function registerTools(
   );
 
   // --- wu_status ---
+  // In local-daemon and remote modes the WhatsApp session lives in another
+  // process, so getSock() is undefined and connection state has to come from
+  // that process (via SSH for remote, unobservable for local-daemon).
   server.tool(
     "wu_status",
-    "Get WhatsApp connection status",
+    "Get WhatsApp connection status. Returns the active mode (local, local-daemon, or remote) and the connection state from whichever process holds the session. In remote mode the remote daemon is SSH'd; the local socket is not what's checked.",
     {},
     async () => {
-      const sock = getSock();
+      const localSock = getSock();
+      const messages_stored = getMessageCount();
+
+      if (localSock) {
+        return jsonResult({
+          mode: "local",
+          connected: (localSock.ws as any)?.isOpen ?? false,
+          messages_stored,
+          timestamp: Date.now(),
+        });
+      }
+
+      if (remote) {
+        try {
+          const ssh = await sshWuExec(remote.remote, ["status", "--json"]);
+          if (ssh.exitCode === 0) {
+            const remoteStatus = JSON.parse(ssh.stdout) as {
+              authenticated?: boolean;
+              daemon_running?: boolean;
+              phone?: string;
+              name?: string;
+            };
+            return jsonResult({
+              mode: "remote",
+              remote_name: remote.name,
+              remote_host: remote.remote.host,
+              connected: !!remoteStatus.daemon_running,
+              authenticated: !!remoteStatus.authenticated,
+              remote_phone: remoteStatus.phone,
+              remote_name_display: remoteStatus.name,
+              messages_stored,
+              note: "Reads served from local synced DB; writes are SSH'd to the remote daemon. messages_stored reflects last sync, not current remote state.",
+              timestamp: Date.now(),
+            });
+          }
+          return jsonResult({
+            mode: "remote",
+            remote_name: remote.name,
+            remote_host: remote.remote.host,
+            connected: false,
+            error: `SSH to remote failed: ${ssh.stderr.trim() || "non-zero exit"}`,
+            messages_stored,
+            timestamp: Date.now(),
+          });
+        } catch (err) {
+          return jsonResult({
+            mode: "remote",
+            remote_name: remote.name,
+            remote_host: remote.remote.host,
+            connected: false,
+            error: (err as Error).message,
+            messages_stored,
+            timestamp: Date.now(),
+          });
+        }
+      }
+
       return jsonResult({
-        connected: sock ? (sock.ws as any)?.isOpen ?? false : false,
-        remote_mode: !!remote,
-        messages_stored: getMessageCount(),
+        mode: "local-daemon",
+        connected: null,
+        note: "A local daemon owns the WhatsApp session; this MCP process is read-only. Run `wu status` directly to see the daemon's connection state.",
+        messages_stored,
         timestamp: Date.now(),
       });
     }
@@ -438,43 +498,118 @@ export function registerTools(
   // --- wu_groups_list ---
   server.tool(
     "wu_groups_list",
-    "List WhatsApp groups (cached from DB, or live from WhatsApp with live=true)",
+    "List WhatsApp groups with community linkage. Returns all known groups by default so JIDs can be discovered. Pass allowed_only=true to skip groups whose constraint is 'none'. Rows include is_community, is_community_announce, and linked_parent for tree rendering.",
     {
       live: z.boolean().optional().default(false).describe("Fetch live from WhatsApp instead of cache"),
-      limit: z.number().optional().default(100).describe("Max results"),
+      allowed_only: z.boolean().optional().default(false).describe("Filter to groups whose constraint mode is read or full (skip 'none')"),
+      limit: z.number().optional().default(200).describe("Max results"),
     },
     async (params) => {
+      const cfg = loadConfig();
       if (params.live) {
         const sock = getSock();
-        if (!sock) return errorResult("Not connected to WhatsApp");
+        if (!sock) return errorResult("Not connected to WhatsApp (use live=false for cached, or run from a process holding the local connection)");
         try {
-          const cfg = loadConfig();
           const groups = await fetchAllGroups(sock);
-          const filtered = Object.values(groups)
-            .filter((g: any) => shouldCollect(g.id, cfg))
-            .slice(0, params.limit);
+          const all = Object.values(groups);
+          const filtered = params.allowed_only ? all.filter((g: any) => shouldCollect(g.id, cfg)) : all;
           return jsonResult(
-            filtered.map((g: any) => ({
+            filtered.slice(0, params.limit).map((g: any) => ({
               jid: g.id,
               name: g.subject,
               participant_count: g.participants?.length ?? 0,
+              is_community: !!g.isCommunity,
+              is_community_announce: !!g.isCommunityAnnounce,
+              linked_parent: g.linkedParent || null,
+              constraint: resolveConstraint(g.id, cfg),
             }))
           );
         } catch (err) {
           return errorResult((err as Error).message);
         }
       }
-      const cfg = loadConfig();
       const allChats = listChats({ limit: 10000 });
-      const chats = allChats
-        .filter((c) => c.type === "group" && shouldCollect(c.jid, cfg))
-        .slice(0, params.limit);
+      let chats = allChats.filter((c) => c.type === "group");
+      if (params.allowed_only) chats = chats.filter((c) => shouldCollect(c.jid, cfg));
+      chats = chats.slice(0, params.limit);
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,
           name: c.name,
           participant_count: c.participant_count,
+          is_community: c.is_community === 1,
+          is_community_announce: c.is_community_announce === 1,
+          linked_parent: c.linked_parent,
           last_message_at: c.last_message_at,
+          last_seen_at: c.last_seen_at,
+          constraint: resolveConstraint(c.jid, cfg),
+        }))
+      );
+    }
+  );
+
+  // --- wu_communities_list ---
+  server.tool(
+    "wu_communities_list",
+    "List WhatsApp Communities (parent groups that contain subgroups). Pass with_subgroups=true to include linked children.",
+    {
+      with_subgroups: z.boolean().optional().default(false).describe("Include linked subgroups under each community"),
+      limit: z.number().optional().default(100).describe("Max communities"),
+    },
+    async (params) => {
+      const cfg = loadConfig();
+      const allChats = listChats({ limit: 10000 });
+      const parents = allChats.filter((c) => c.type === "group" && c.is_community === 1).slice(0, params.limit);
+
+      const childrenByParent = new Map<string, typeof allChats>();
+      if (params.with_subgroups) {
+        for (const c of allChats) {
+          if (c.linked_parent) {
+            const list = childrenByParent.get(c.linked_parent) || [];
+            list.push(c);
+            childrenByParent.set(c.linked_parent, list);
+          }
+        }
+      }
+
+      return jsonResult(
+        parents.map((p) => ({
+          jid: p.jid,
+          name: p.name,
+          constraint: resolveConstraint(p.jid, cfg),
+          subgroups: params.with_subgroups
+            ? (childrenByParent.get(p.jid) || []).map((c) => ({
+                jid: c.jid,
+                name: c.name,
+                is_announce: c.is_community_announce === 1,
+                constraint: resolveConstraint(c.jid, cfg),
+              }))
+            : undefined,
+        }))
+      );
+    }
+  );
+
+  // --- wu_dms_list ---
+  server.tool(
+    "wu_dms_list",
+    "List 1:1 (direct message) chats. Constraint-gated by default since DM JIDs contain phone numbers. Pass include_blocked=true to see un-opted-in JIDs.",
+    {
+      include_blocked: z.boolean().optional().default(false).describe("Include DMs whose constraint resolves to 'none'"),
+      limit: z.number().optional().default(100).describe("Max results"),
+    },
+    async (params) => {
+      const cfg = loadConfig();
+      const allChats = listChats({ limit: 10000 });
+      let dms = allChats.filter((c) => c.type === "dm");
+      if (!params.include_blocked) dms = dms.filter((c) => shouldCollect(c.jid, cfg));
+      dms = dms.slice(0, params.limit);
+      return jsonResult(
+        dms.map((c) => ({
+          jid: c.jid,
+          name: c.name,
+          last_message_at: c.last_message_at,
+          constraint: resolveConstraint(c.jid, cfg),
         }))
       );
     }

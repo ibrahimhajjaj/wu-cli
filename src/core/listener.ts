@@ -248,22 +248,29 @@ export function startListener(
   );
 
   // --- chats.upsert ---
+  // Groups bypass the constraint gate when group_discovery is on. DMs are
+  // always gated because their JID contains a phone number.
   sock.ev.on(
     "chats.upsert",
     safeHandler("chats.upsert", (chats: any[]) => {
+      const now = Math.floor(Date.now() / 1000);
+      const discoveryOn = config.whatsapp.group_discovery;
       for (const chat of chats) {
         if (!chat.id || isStatusOrBroadcast(chat.id)) continue;
-        if (!shouldCollect(chat.id, config)) continue;
+        const isGroup = chat.id.endsWith("@g.us");
+        const allow = isGroup ? discoveryOn || shouldCollect(chat.id, config) : shouldCollect(chat.id, config);
+        if (!allow) continue;
 
         upsertChat({
           jid: chat.id,
           name: chat.name || chat.subject || null,
-          type: chat.id.endsWith("@g.us") ? "group" : "dm",
+          type: isGroup ? "group" : "dm",
           participant_count: null,
           description: null,
           last_message_at: chat.conversationTimestamp
             ? Number(chat.conversationTimestamp)
             : null,
+          last_seen_at: now,
         });
       }
     })
@@ -273,19 +280,24 @@ export function startListener(
   sock.ev.on(
     "chats.update",
     safeHandler("chats.update", (updates: any[]) => {
+      const now = Math.floor(Date.now() / 1000);
+      const discoveryOn = config.whatsapp.group_discovery;
       for (const update of updates) {
         if (!update.id || isStatusOrBroadcast(update.id)) continue;
-        if (!shouldCollect(update.id, config)) continue;
+        const isGroup = update.id.endsWith("@g.us");
+        const allow = isGroup ? discoveryOn || shouldCollect(update.id, config) : shouldCollect(update.id, config);
+        if (!allow) continue;
 
         upsertChat({
           jid: update.id,
           name: update.name || update.subject || null,
-          type: update.id.endsWith("@g.us") ? "group" : "dm",
+          type: isGroup ? "group" : "dm",
           participant_count: null,
           description: null,
           last_message_at: update.conversationTimestamp
             ? Number(update.conversationTimestamp)
             : null,
+          last_seen_at: now,
         });
       }
     })
@@ -335,22 +347,33 @@ export function startListener(
   );
 
   // --- groups.upsert ---
+  // jid/name/community shape always cached when group_discovery is on (default)
+  // so users can find groups to opt into. Description and participant JIDs
+  // stay constraint-gated regardless of the flag.
   sock.ev.on(
     "groups.upsert",
     safeHandler("groups.upsert", (groups: any[]) => {
+      const now = Math.floor(Date.now() / 1000);
+      const discoveryOn = config.whatsapp.group_discovery;
       for (const group of groups) {
-        if (!group.id || !shouldCollect(group.id, config)) continue;
+        if (!group.id) continue;
+        const allowed = shouldCollect(group.id, config);
+        if (!discoveryOn && !allowed) continue;
 
         upsertChat({
           jid: group.id,
           name: group.subject || null,
           type: "group",
           participant_count: group.participants?.length || null,
-          description: group.desc || null,
+          description: allowed ? group.desc || null : null,
           last_message_at: null,
+          last_seen_at: now,
+          is_community: group.isCommunity ? 1 : 0,
+          is_community_announce: group.isCommunityAnnounce ? 1 : 0,
+          linked_parent: group.linkedParent || null,
         });
 
-        if (group.participants) {
+        if (group.participants && allowed) {
           upsertGroupParticipants(
             group.id,
             group.participants.map((p: any) => ({
@@ -368,16 +391,25 @@ export function startListener(
   sock.ev.on(
     "groups.update",
     safeHandler("groups.update", (updates: any[]) => {
+      const now = Math.floor(Date.now() / 1000);
+      const discoveryOn = config.whatsapp.group_discovery;
       for (const update of updates) {
-        if (!update.id || !shouldCollect(update.id, config)) continue;
+        if (!update.id) continue;
+        const allowed = shouldCollect(update.id, config);
+        if (!discoveryOn && !allowed) continue;
 
         upsertChat({
           jid: update.id,
           name: update.subject || null,
           type: "group",
           participant_count: null,
-          description: update.desc || null,
+          description: allowed ? update.desc || null : null,
           last_message_at: null,
+          last_seen_at: now,
+          is_community: update.isCommunity != null ? (update.isCommunity ? 1 : 0) : null,
+          is_community_announce:
+            update.isCommunityAnnounce != null ? (update.isCommunityAnnounce ? 1 : 0) : null,
+          linked_parent: update.linkedParent || null,
         });
       }
     })
@@ -425,9 +457,19 @@ export function startListener(
           );
         }
 
-        // Bulk upsert chats
+        // Bulk upsert chats. Groups bypass constraints (discovery surface)
+        // when whatsapp.group_discovery is enabled; DMs stay gated because
+        // the JID contains the contact's phone number.
+        const now = Math.floor(Date.now() / 1000);
+        const discoveryOn = config.whatsapp.group_discovery;
         const chatRows = chats
-          .filter((c) => c.id && !isStatusOrBroadcast(c.id) && shouldCollect(c.id, config))
+          .filter((c) => {
+            if (!c.id || isStatusOrBroadcast(c.id)) return false;
+            if (c.id.endsWith("@g.us")) {
+              return discoveryOn || shouldCollect(c.id, config);
+            }
+            return shouldCollect(c.id, config);
+          })
           .map((c) => ({
             jid: c.id,
             name: c.name || c.subject || null,
@@ -437,6 +479,7 @@ export function startListener(
             last_message_at: c.conversationTimestamp
               ? Number(c.conversationTimestamp)
               : null,
+            last_seen_at: now,
           }));
         bulkUpsertChats(chatRows);
 
