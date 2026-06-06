@@ -6,7 +6,47 @@ import {
   extractQuotedId,
   extractLocationData,
   extractMediaInfo,
+  extractSystemEvent,
 } from "../src/core/extract.js";
+
+describe("extractSystemEvent", () => {
+  it("phrases known stub types from enum name", () => {
+    assert.equal(extractSystemEvent({ messageStubType: "GROUP_PARTICIPANT_ADD" } as any), "participant added");
+    assert.equal(extractSystemEvent({ messageStubType: "GROUP_PARTICIPANT_LEAVE" } as any), "participant left");
+    assert.equal(extractSystemEvent({ messageStubType: "E2E_IDENTITY_CHANGED" } as any), "security code changed");
+  });
+
+  it("humanizes unmapped stub names", () => {
+    assert.equal(extractSystemEvent({ messageStubType: "GROUP_PARTICIPANT_CHANGE_NUMBER" } as any), "participant changed number");
+  });
+
+  it("resolves numeric stub types via the proto enum", () => {
+    // 1 === REVOKE in the proto StubType enum
+    assert.equal(extractSystemEvent({ messageStubType: 1 } as any), "revoke");
+  });
+
+  it("returns null when there is no stub event", () => {
+    assert.equal(extractSystemEvent({} as any), null);
+    assert.equal(extractSystemEvent({ messageStubType: "UNKNOWN" } as any), null);
+  });
+});
+
+describe("extractMessageType new wrappers", () => {
+  it("classifies albums and edits", () => {
+    assert.equal(extractMessageType({ albumMessage: { expectedImageCount: 2 } } as any), "album");
+    assert.equal(
+      extractMessageType({ protocolMessage: { editedMessage: { conversation: "fixed typo" } } } as any),
+      "edited"
+    );
+  });
+
+  it("reads the new text out of an edit", () => {
+    assert.equal(
+      extractText({ protocolMessage: { editedMessage: { conversation: "fixed typo" } } } as any),
+      "fixed typo"
+    );
+  });
+});
 
 // Fixture WAMessage content objects (matching Baileys proto.IMessage shape)
 

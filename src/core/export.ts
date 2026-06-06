@@ -1,5 +1,13 @@
 import { getDb } from "../db/database.js";
 import type { MessageRow } from "./store.js";
+import { deserializeWAMessage } from "./store.js";
+import {
+  getMessageContent,
+  extractDocumentFileName,
+  extractAudioMeta,
+  extractAlbumLabel,
+} from "./extract.js";
+import type { WAMessage } from "@whiskeysockets/baileys";
 import { writeFileSync, mkdirSync, statSync, openSync, writeSync, closeSync } from "fs";
 import { dirname } from "path";
 
@@ -10,7 +18,64 @@ export interface ExportOptions {
   format?: "jsonl" | "json" | "markdown" | "csv";
   output: string;
   excludeReactions?: boolean;
+  types?: string[];
+  excludeTypes?: string[];
   batchSize?: number;
+}
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+// Human-readable label for a non-text message, distinguishing media subtypes
+// so a reader can tell a flyer image from a PDF from a voice note. Falls back
+// to deserializing `raw` only for the types that carry extra detail.
+export function mediaLabel(
+  row: Pick<MessageRow, "type" | "media_mime" | "raw">
+): string {
+  switch (row.type) {
+    case "image":
+      return "[image]";
+    case "video":
+      return "[video]";
+    case "sticker":
+      return "[sticker]";
+    case "poll":
+      return "[poll]";
+    case "contact":
+      return "[contact]";
+    case "location":
+      return "[location]";
+    case "deleted":
+      return "[deleted]";
+    case "reaction":
+      return "[reaction]";
+    case "edited":
+      return "[edited]";
+    case "system":
+      return "[event]";
+    case "album":
+      return row.raw
+        ? extractAlbumLabel(getMessageContent(deserializeWAMessage(row.raw) as WAMessage))
+        : "[album]";
+    case "audio": {
+      const meta = row.raw
+        ? extractAudioMeta(getMessageContent(deserializeWAMessage(row.raw) as WAMessage))
+        : null;
+      const dur = meta?.seconds ? ` ${formatDuration(meta.seconds)}` : "";
+      return `[${meta?.ptt ? "voice" : "audio"}${dur}]`;
+    }
+    case "document": {
+      const name = row.raw
+        ? extractDocumentFileName(getMessageContent(deserializeWAMessage(row.raw) as WAMessage))
+        : null;
+      return name ? `[document: ${name}]` : "[document]";
+    }
+    default:
+      return row.media_mime ? `[${row.type}: ${row.media_mime}]` : `[${row.type}]`;
+  }
 }
 
 export interface ExportResult {
@@ -58,6 +123,14 @@ export function exportMessages(opts: ExportOptions): ExportResult {
   }
   if (opts.excludeReactions) {
     conditions.push("type != 'reaction'");
+  }
+  if (opts.types?.length) {
+    conditions.push(`type IN (${opts.types.map(() => "?").join(", ")})`);
+    params.push(...opts.types);
+  }
+  if (opts.excludeTypes?.length) {
+    conditions.push(`type NOT IN (${opts.excludeTypes.map(() => "?").join(", ")})`);
+    params.push(...opts.excludeTypes);
   }
 
   const where = conditions.join(" AND ");
@@ -155,12 +228,12 @@ export function exportMessages(opts: ExportOptions): ExportResult {
           }
           const time = date.toTimeString().slice(0, 5);
           const sender = row.sender_name || row.sender_jid || (row.is_from_me ? "Me" : "Unknown");
-          if (row.body) {
-            w(`### ${time} — ${sender}\n${row.body}\n\n`);
-          } else if (row.media_mime) {
-            w(`### ${time} — ${sender}\n(media: ${row.type}, mime: ${row.media_mime})\n\n`);
+          if (row.type === "text") {
+            w(`### ${time} — ${sender}\n${row.body || ""}\n\n`);
           } else {
-            w(`### ${time} — ${sender}\n(${row.type})\n\n`);
+            // Media/other: distinct label, with caption appended when present
+            const caption = row.body ? ` ${row.body}` : "";
+            w(`### ${time} — ${sender}\n${mediaLabel(row)}${caption}\n\n`);
           }
           break;
         }

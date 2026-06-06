@@ -1,5 +1,12 @@
 import type Database from "better-sqlite3";
+import type { WAMessage } from "@whiskeysockets/baileys";
 import { CREATE_TABLES_SQL, SCHEMA_VERSION } from "./schema.js";
+import {
+  getMessageContent,
+  extractMessageType,
+  extractText,
+  extractSystemEvent,
+} from "../core/extract.js";
 
 const MIGRATIONS_TABLE = `
 CREATE TABLE IF NOT EXISTS _migrations (
@@ -25,10 +32,52 @@ export function migrate(db: Database.Database): void {
       if (currentVersion < 2) {
         applyV2(db);
       }
+      if (currentVersion < 3) {
+        applyV3(db);
+      }
       db.prepare("INSERT INTO _migrations (version) VALUES (?)").run(
         SCHEMA_VERSION
       );
     })();
+  }
+}
+
+// Reclassify already-collected type='unknown' rows by re-deriving the type
+// from stored raw: system events (joins/leaves/renames), albums and edits that
+// earlier ingestion bucketed as unknown become labelled.
+function applyV3(db: Database.Database): void {
+  const deserialize = (raw: string): WAMessage =>
+    JSON.parse(raw, (_k, v) =>
+      v && typeof v === "object" && v.__type === "Uint8Array" && typeof v.data === "string"
+        ? new Uint8Array(Buffer.from(v.data, "base64"))
+        : v
+    ) as WAMessage;
+
+  const rows = db
+    .prepare("SELECT id, body, raw FROM messages WHERE type = 'unknown' AND raw IS NOT NULL")
+    .all() as Array<{ id: string; body: string | null; raw: string }>;
+
+  const update = db.prepare("UPDATE messages SET type = ?, body = ? WHERE id = ?");
+
+  for (const row of rows) {
+    try {
+      const msg = deserialize(row.raw);
+      const content = getMessageContent(msg);
+      let type = extractMessageType(content);
+      let body = extractText(content);
+      if (type === "unknown") {
+        const event = extractSystemEvent(msg);
+        if (event) {
+          type = "system";
+          body = event;
+        }
+      }
+      if (type !== "unknown") {
+        update.run(type, row.body ?? body, row.id);
+      }
+    } catch {
+      // Leave undecodable rows as unknown.
+    }
   }
 }
 

@@ -6,6 +6,7 @@ import {
   getMessageContent,
   extractText,
   extractMessageType,
+  extractSystemEvent,
   extractQuotedId,
   extractLocationData,
   extractMediaInfo,
@@ -70,8 +71,17 @@ function parseMessage(msg: WAMessage): ParsedMessage | null {
   if (!jid) return null;
 
   const content = getMessageContent(msg);
-  const type = extractMessageType(content);
-  const text = extractText(content);
+  let type = extractMessageType(content);
+  let text = extractText(content);
+  // System events (joins, leaves, renames, ...) carry no message content but
+  // a messageStubType — label them instead of dropping them into "unknown".
+  if (type === "unknown") {
+    const event = extractSystemEvent(msg);
+    if (event) {
+      type = "system";
+      text = event;
+    }
+  }
   const loc = extractLocationData(content);
   const media = extractMediaInfo(content);
   const quotedId = extractQuotedId(content);
