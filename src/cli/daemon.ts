@@ -5,6 +5,7 @@ import { homedir } from "os";
 import { unlinkSync } from "fs";
 import { ReconnectingConnection } from "../core/connection.js";
 import { startListener } from "../core/listener.js";
+import { startDaemonIpc } from "../core/ipc.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
@@ -53,10 +54,15 @@ async function runDaemon(): Promise<void> {
     log(`♥ RSS: ${(mem.rss / 1048576).toFixed(0)}MB | Heap: ${(mem.heapUsed / 1048576).toFixed(0)}MB | Uptime: ${uptimeH}h | Messages: ${msgs}`);
   }, 5 * 60 * 1000);
 
+  // IPC server — lets CLI/MCP media downloads reuse this live socket instead
+  // of opening a second WhatsApp login (which would collide and drop both).
+  const stopIpc = startDaemonIpc(() => conn.getSock(), config);
+
   // Graceful shutdown
   const shutdown = async () => {
     log("● Shutting down...");
     clearInterval(healthInterval);
+    stopIpc();
     await conn.stop();
     closeDb();
     releaseLock();

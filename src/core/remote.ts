@@ -34,12 +34,15 @@ function sshControlArgs(): string[] {
 
 // --- SSH execution ---
 
+const DEFAULT_SSH_TIMEOUT = 30_000;
+
 function spawnSsh(
   args: string[],
   retries = 1,
+  timeoutMs = DEFAULT_SSH_TIMEOUT,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
-    execFile("ssh", args, { timeout: 30_000 }, (err, stdout, stderr) => {
+    execFile("ssh", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
       const exitCode = err ? (err as any).code ?? 1 : 0;
 
       // Retry on transient SSH errors
@@ -49,7 +52,7 @@ function spawnSsh(
         /connection reset|timed out|broken pipe/i.test(stderr)
       ) {
         setTimeout(() => {
-          spawnSsh(args, retries - 1).then(resolve);
+          spawnSsh(args, retries - 1, timeoutMs).then(resolve);
         }, 1000);
         return;
       }
@@ -59,21 +62,49 @@ function spawnSsh(
   });
 }
 
+export interface SshExecOptions {
+  // Cold login + a media batch easily exceeds the default 30s; callers doing
+  // media work pass a larger budget here.
+  timeoutMs?: number;
+}
+
 export async function sshRawExec(
   remote: RemoteConfig,
   command: string,
+  opts?: SshExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const args = [...sshControlArgs(), remote.host, command];
-  return spawnSsh(args);
+  return spawnSsh(args, 1, opts?.timeoutMs ?? DEFAULT_SSH_TIMEOUT);
 }
 
 export async function sshWuExec(
   remote: RemoteConfig,
   wuArgs: string[],
+  opts?: SshExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const escaped = wuArgs.map(shellEscape).join(" ");
   const command = `env WU_HOME=${remotePath(remote.wu_home)} wu ${escaped}`;
-  return sshRawExec(remote, command);
+  return sshRawExec(remote, command, opts);
+}
+
+// Pull media files downloaded on the remote back to the local media dir so the
+// client actually has the bytes. rsync only transfers what's missing.
+export async function syncMedia(
+  remote: RemoteConfig,
+  localMediaDir: string,
+): Promise<{ method: string }> {
+  const remoteMediaDir = `${remote.host}:${remote.wu_home.replace(/\/+$/, "")}/media/`;
+  return new Promise((resolve, reject) => {
+    execFile(
+      "rsync",
+      ["-az", "--ignore-existing", remoteMediaDir, localMediaDir.replace(/\/+$/, "") + "/"],
+      { timeout: 300_000 },
+      (err) => {
+        if (err) reject(new Error(`media rsync failed: ${(err as Error).message}`));
+        else resolve({ method: "rsync" });
+      },
+    );
+  });
 }
 
 // --- DB sync ---

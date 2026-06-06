@@ -9,6 +9,7 @@ import { DB_PATH } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia, downloadMediaBatch } from "../core/media.js";
+import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
 import {
@@ -19,7 +20,10 @@ import {
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
 import { exportMessages } from "../core/export.js";
-import { sshWuExec, syncDb } from "../core/remote.js";
+import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
+import { MEDIA_DIR } from "../config/paths.js";
+
+const MEDIA_SSH_TIMEOUT_MS = 300_000;
 
 function jsonResult(data: unknown) {
   return {
@@ -165,19 +169,47 @@ export function registerTools(
     },
     async (params) => {
       const sock = getSock();
-      if (!sock) return errorResult("Not connected to WhatsApp (media download requires local connection)");
-
-      try {
-        const result = await downloadMedia(
-          params.message_id,
-          sock,
-          config,
-          params.out_dir
-        );
-        return jsonResult(result);
-      } catch (err) {
-        return errorResult((err as Error).message);
+      if (sock) {
+        try {
+          const result = await downloadMedia(params.message_id, sock, config, params.out_dir);
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
       }
+
+      // No local socket: route through a running daemon's socket if present.
+      if (await daemonIpcAvailable()) {
+        try {
+          const result = await daemonRequest("media.download", {
+            msgId: params.message_id,
+            outDir: params.out_dir,
+          });
+          return jsonResult(result);
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      // Remote mode: download on the VPS (its daemon serves it), then pull the
+      // bytes back so the file exists locally.
+      if (remote) {
+        try {
+          const args = ["media", "download", params.message_id];
+          if (params.out_dir) args.push("--out", params.out_dir);
+          args.push("--json");
+          const sshResult = await sshWuExec(remote.remote, args, { timeoutMs: MEDIA_SSH_TIMEOUT_MS });
+          if (sshResult.exitCode !== 0) {
+            return errorResult(`Remote download failed: ${sshResult.stderr}`);
+          }
+          try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
+          return jsonResult(JSON.parse(sshResult.stdout));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      return errorResult("Not connected to WhatsApp and no daemon or remote available");
     }
   );
 
@@ -764,6 +796,8 @@ export function registerTools(
       format: z.enum(["jsonl", "json", "markdown", "csv"]).optional().default("jsonl").describe("Output format"),
       output: z.string().describe("File path to write to"),
       exclude_reactions: z.boolean().optional().default(false).describe("Skip reaction messages"),
+      types: z.array(z.string()).optional().describe("Only export these message types (e.g. text, image, document)"),
+      exclude_types: z.array(z.string()).optional().describe("Skip these message types (e.g. sticker, reaction)"),
     },
     async (params) => {
       const cfg = loadConfig();
@@ -778,6 +812,8 @@ export function registerTools(
           format: params.format,
           output: params.output,
           excludeReactions: params.exclude_reactions,
+          types: params.types,
+          excludeTypes: params.exclude_types,
         });
         return jsonResult(result);
       } catch (err) {
@@ -850,6 +886,22 @@ export function registerTools(
     async (params) => {
       const sock = getSock();
       if (!sock) {
+        // Route through a local daemon's socket when one is running (it resolves
+        // the chat's undownloaded media itself when no ids are given).
+        if (await daemonIpcAvailable()) {
+          try {
+            const result = await daemonRequest("media.downloadBatch", {
+              msgIds: params.message_ids,
+              chat: params.chat,
+              limit: params.limit,
+              concurrency: params.concurrency,
+            });
+            return jsonResult(result);
+          } catch (err) {
+            return errorResult((err as Error).message);
+          }
+        }
+
         if (remote) {
           try {
             const args = ["media", "download-batch"];
@@ -858,10 +910,13 @@ export function registerTools(
             if (params.concurrency) args.push("--concurrency", String(params.concurrency));
             args.push("--json");
 
-            const sshResult = await sshWuExec(remote.remote, args);
+            // Cold login + a batch can run long; give it room, and pull the
+            // downloaded files back to the local media dir afterwards.
+            const sshResult = await sshWuExec(remote.remote, args, { timeoutMs: MEDIA_SSH_TIMEOUT_MS });
             if (sshResult.exitCode !== 0) {
               return errorResult(`Remote batch download failed: ${sshResult.stderr}`);
             }
+            try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
             return jsonResult(JSON.parse(sshResult.stdout));
           } catch (err) {
             return errorResult((err as Error).message);

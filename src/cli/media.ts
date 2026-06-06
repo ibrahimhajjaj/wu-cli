@@ -1,11 +1,18 @@
 import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
 import { downloadMedia, downloadMediaBatch } from "../core/media.js";
+import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { sendMedia } from "../core/sender.js";
 import { loadConfig } from "../config/schema.js";
 import { getDb } from "../db/database.js";
 import { outputResult } from "./format.js";
 import { EXIT_GENERAL_ERROR, EXIT_NOT_FOUND } from "./exit-codes.js";
+
+interface DownloadResult { path: string; mime: string; size: number }
+interface BatchResult {
+  results: Array<{ msgId: string; path: string; mime: string; size: number }>;
+  errors: Array<{ msgId: string; error: string }>;
+}
 
 export function registerMediaCommand(program: Command): void {
   const media = program.command("media").description("Download and send media");
@@ -17,17 +24,29 @@ export function registerMediaCommand(program: Command): void {
     .option("--json", "Output as JSON")
     .action(async (msgId: string, opts: { out?: string; json?: boolean }) => {
       const config = loadConfig();
+      const printOne = (result: DownloadResult) => {
+        if (opts.json) {
+          console.log(JSON.stringify(result));
+        } else {
+          console.log(`Downloaded: ${result.path}`);
+          console.log(`Type: ${result.mime}`);
+          console.log(`Size: ${(result.size / 1024).toFixed(1)} KB`);
+        }
+      };
       try {
-        await withConnection(async (sock) => {
-          const result = await downloadMedia(msgId, sock, config, opts.out);
-          if (opts.json) {
-            console.log(JSON.stringify(result));
-          } else {
-            console.log(`Downloaded: ${result.path}`);
-            console.log(`Type: ${result.mime}`);
-            console.log(`Size: ${(result.size / 1024).toFixed(1)} KB`);
-          }
-        });
+        // Reuse the daemon's live socket when it's running, so we don't open a
+        // second WhatsApp login that would collide with it.
+        if (await daemonIpcAvailable()) {
+          const result = await daemonRequest<DownloadResult>("media.download", {
+            msgId,
+            outDir: opts.out,
+          });
+          printOne(result);
+        } else {
+          await withConnection(async (sock) => {
+            printOne(await downloadMedia(msgId, sock, config, opts.out));
+          });
+        }
       } catch (err) {
         const msg = (err as Error).message;
         if (msg.includes("not found")) {
@@ -91,27 +110,57 @@ export function registerMediaCommand(program: Command): void {
         const limit = parseInt(opts.limit, 10);
         const concurrency = parseInt(opts.concurrency, 10);
 
-        const db = getDb();
-        const rows = db
-          .prepare(
-            "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
-          )
-          .all(jid, limit) as Array<{ id: string }>;
-
-        if (rows.length === 0) {
+        const printBatch = ({ results, errors }: BatchResult) => {
           if (opts.json) {
-            outputResult({ results: [], errors: [] }, { json: true });
+            outputResult({ results, errors }, { json: true });
           } else {
-            console.log("No undownloaded media found.");
+            console.log(`Downloaded: ${results.length}`);
+            if (errors.length > 0) {
+              console.log(`Errors: ${errors.length}`);
+              for (const e of errors) console.error(`  ${e.msgId}: ${e.error}`);
+            }
           }
-          return;
-        }
-
-        if (!opts.json) {
-          console.log(`Found ${rows.length} media to download (concurrency: ${concurrency})`);
-        }
+        };
 
         try {
+          // When the daemon owns the socket, hand the whole batch to it (it
+          // resolves the chat's undownloaded media itself) rather than logging
+          // in a second time.
+          if (await daemonIpcAvailable()) {
+            const res = await daemonRequest<BatchResult>("media.downloadBatch", {
+              chat: jid,
+              limit,
+              concurrency,
+              outDir: opts.out,
+            });
+            if (res.results.length === 0 && res.errors.length === 0 && !opts.json) {
+              console.log("No undownloaded media found.");
+              return;
+            }
+            printBatch(res);
+            return;
+          }
+
+          const db = getDb();
+          const rows = db
+            .prepare(
+              "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
+            )
+            .all(jid, limit) as Array<{ id: string }>;
+
+          if (rows.length === 0) {
+            if (opts.json) {
+              outputResult({ results: [], errors: [] }, { json: true });
+            } else {
+              console.log("No undownloaded media found.");
+            }
+            return;
+          }
+
+          if (!opts.json) {
+            console.log(`Found ${rows.length} media to download (concurrency: ${concurrency})`);
+          }
+
           await withConnection(async (sock) => {
             const { results, errors } = await downloadMediaBatch(
               rows.map((r) => r.id),
@@ -127,20 +176,8 @@ export function registerMediaCommand(program: Command): void {
                 },
               }
             );
-
             if (!opts.json) process.stderr.write("\n");
-
-            if (opts.json) {
-              outputResult({ results, errors }, { json: true });
-            } else {
-              console.log(`Downloaded: ${results.length}`);
-              if (errors.length > 0) {
-                console.log(`Errors: ${errors.length}`);
-                for (const e of errors) {
-                  console.error(`  ${e.msgId}: ${e.error}`);
-                }
-              }
-            }
+            printBatch({ results, errors });
           });
         } catch (err) {
           console.error((err as Error).message);

@@ -8,6 +8,7 @@ const { version } = require("../../package.json");
 import type { WASocket } from "@whiskeysockets/baileys";
 import { createConnection, waitForConnection } from "../core/connection.js";
 import { startListener } from "../core/listener.js";
+import { startDaemonIpc } from "../core/ipc.js";
 import { isLocked, acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { DB_PATH } from "../config/paths.js";
@@ -27,6 +28,7 @@ export async function startMcpServer(): Promise<void> {
   let sock: WASocket | undefined;
   let flushCreds: (() => Promise<void>) | undefined;
   let ownsConnection = false;
+  let stopIpc: (() => void) | undefined;
 
   const getSock = (): WASocket | undefined => sock;
 
@@ -70,6 +72,9 @@ export async function startMcpServer(): Promise<void> {
 
     // Start listener for message collection
     startListener(sock, { config, quiet: true });
+
+    // Expose the socket over IPC so concurrent CLI media downloads reuse it.
+    stopIpc = startDaemonIpc(getSock, config);
   }
 
   // Register tools and resources
@@ -79,6 +84,7 @@ export async function startMcpServer(): Promise<void> {
   // Graceful shutdown
   const shutdown = async () => {
     process.stderr.write("wu-mcp: Shutting down...\n");
+    if (stopIpc) stopIpc();
     if (flushCreds) await flushCreds();
     if (sock) sock.end(undefined);
     closeDb();
