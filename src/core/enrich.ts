@@ -170,7 +170,7 @@ async function ocrViaApi(file: string, api: NonNullable<EnrichCapabilityConfig["
     },
     body: JSON.stringify({
       model: api.model,
-      max_tokens: 1024,
+      max_tokens: 8192,
       messages: [
         {
           role: "user",
