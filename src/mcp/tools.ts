@@ -8,7 +8,7 @@ import { existsSync, unlinkSync } from "fs";
 import { DB_PATH } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
-import { downloadMedia, downloadMediaBatch } from "../core/media.js";
+import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration } from "../core/media.js";
 import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
@@ -882,6 +882,7 @@ export function registerTools(
       chat: z.string().optional().describe("Chat JID — find undownloaded media in this chat"),
       limit: z.number().optional().default(50).describe("Max messages to download (when using chat)"),
       concurrency: z.number().optional().default(4).describe("Parallel download workers"),
+      delete_remote_after: z.boolean().optional().default(false).describe("In remote mode, delete the files on the VPS after pulling them back (saves disk on the box)"),
     },
     async (params) => {
       const sock = getSock();
@@ -917,6 +918,10 @@ export function registerTools(
               return errorResult(`Remote batch download failed: ${sshResult.stderr}`);
             }
             try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
+            if (params.delete_remote_after && params.chat) {
+              // Bytes are now local; reclaim the VPS copy.
+              try { await sshWuExec(remote.remote, ["media", "prune", "--chat", params.chat], { timeoutMs: MEDIA_SSH_TIMEOUT_MS }); } catch { /* best effort */ }
+            }
             return jsonResult(JSON.parse(sshResult.stdout));
           } catch (err) {
             return errorResult((err as Error).message);
@@ -943,6 +948,47 @@ export function registerTools(
           concurrency: params.concurrency,
         });
         return jsonResult({ results, errors });
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_media_prune ---
+  server.tool(
+    "wu_media_prune",
+    "Delete downloaded media files to reclaim disk (exports/DB are the durable record). In remote mode, prunes on the VPS.",
+    {
+      older_than: z.string().optional().describe("Only prune media older than this (e.g. 30d, 12h, 2w)"),
+      chat: z.string().optional().describe("Limit to one chat JID"),
+      dry_run: z.boolean().optional().default(false).describe("Report what would be freed without deleting"),
+    },
+    async (params) => {
+      // Media lives wherever the daemon runs: locally if we own the socket,
+      // otherwise on the VPS in remote mode.
+      if (remote && !getSock()) {
+        try {
+          const args = ["media", "prune"];
+          if (params.older_than) args.push("--older-than", params.older_than);
+          if (params.chat) args.push("--chat", params.chat);
+          if (params.dry_run) args.push("--dry-run");
+          args.push("--json");
+          const sshResult = await sshWuExec(remote.remote, args, { timeoutMs: MEDIA_SSH_TIMEOUT_MS });
+          if (sshResult.exitCode !== 0) return errorResult(`Remote prune failed: ${sshResult.stderr}`);
+          return jsonResult(JSON.parse(sshResult.stdout));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      let olderThanSec: number | undefined;
+      if (params.older_than) {
+        const parsed = parseDuration(params.older_than);
+        if (parsed === null) return errorResult(`Invalid duration: ${params.older_than} (try 30d, 12h, 2w)`);
+        olderThanSec = parsed;
+      }
+      try {
+        return jsonResult(pruneMedia({ olderThanSec, chatJid: params.chat, dryRun: params.dry_run }));
       } catch (err) {
         return errorResult((err as Error).message);
       }

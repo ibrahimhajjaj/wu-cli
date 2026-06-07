@@ -5,7 +5,7 @@ import {
   type WAMessage,
   type MediaType,
 } from "@whiskeysockets/baileys";
-import { writeFileSync, mkdirSync } from "fs";
+import { writeFileSync, mkdirSync, statSync, unlinkSync } from "fs";
 import { join, extname } from "path";
 import type { WuConfig } from "../config/schema.js";
 import { getMessage, upsertMessage, deserializeWAMessage, type MessageRow } from "./store.js";
@@ -167,4 +167,76 @@ export async function downloadMediaBatch(
   }
 
   return { results, errors };
+}
+
+// Parse a duration like "30d", "12h", "2w", "45m" into seconds. Bare numbers
+// are treated as days. Returns null on garbage.
+export function parseDuration(input: string): number | null {
+  const m = /^(\d+)\s*([smhdw]?)$/i.exec(input.trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  const unit = (m[2] || "d").toLowerCase();
+  const mult: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+  return n * (mult[unit] ?? 86400);
+}
+
+export interface PruneOptions {
+  olderThanSec?: number;
+  chatJid?: string;
+  dryRun?: boolean;
+}
+
+export interface PruneResult {
+  pruned: number;
+  freed_bytes: number;
+  missing: number;
+}
+
+// Delete downloaded media files (the markdown/manifest dumps are the durable
+// record; the bytes are disposable and pile up on both VPS and laptop). Clears
+// media_path so a later read knows the file is gone.
+export function pruneMedia(opts: PruneOptions = {}): PruneResult {
+  const db = getDb();
+  const conditions = ["media_path IS NOT NULL"];
+  const params: unknown[] = [];
+  if (opts.olderThanSec) {
+    conditions.push("timestamp < ?");
+    params.push(Math.floor(Date.now() / 1000) - opts.olderThanSec);
+  }
+  if (opts.chatJid) {
+    conditions.push("chat_jid = ?");
+    params.push(opts.chatJid);
+  }
+
+  const rows = db
+    .prepare(`SELECT id, media_path FROM messages WHERE ${conditions.join(" AND ")}`)
+    .all(...params) as Array<{ id: string; media_path: string }>;
+
+  const clear = db.prepare("UPDATE messages SET media_path = NULL WHERE id = ?");
+  let pruned = 0;
+  let freed = 0;
+  let missing = 0;
+
+  for (const row of rows) {
+    let size = 0;
+    let present = false;
+    try {
+      size = statSync(row.media_path).size;
+      present = true;
+    } catch {
+      missing++;
+    }
+    if (!opts.dryRun) {
+      if (present) {
+        try { unlinkSync(row.media_path); } catch { /* already gone */ }
+      }
+      clear.run(row.id);
+    }
+    if (present) {
+      pruned++;
+      freed += size;
+    }
+  }
+
+  return { pruned, freed_bytes: freed, missing };
 }
