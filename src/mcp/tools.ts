@@ -19,7 +19,7 @@ import {
   getFilteredMessageCount,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
-import { exportMessages } from "../core/export.js";
+import { exportMessages, collectUndownloadedMedia, buildManifest, writeManifest } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
 import { MEDIA_DIR } from "../config/paths.js";
 
@@ -44,6 +44,29 @@ export function registerTools(
   config: WuConfig,
   remote?: { name: string; remote: RemoteConfig },
 ): void {
+  // Download specific media ids by whatever path is available (local socket,
+  // a running daemon's socket, or the remote VPS), pulling bytes back locally.
+  async function downloadMediaForManifest(
+    ids: string[]
+  ): Promise<{ results: unknown[]; errors: unknown[] }> {
+    const sock = getSock();
+    if (sock) return downloadMediaBatch(ids, sock, config);
+    if (await daemonIpcAvailable()) {
+      return daemonRequest("media.downloadBatch", { msgIds: ids });
+    }
+    if (remote) {
+      const sshResult = await sshWuExec(
+        remote.remote,
+        ["media", "download-batch", "--ids", ids.join(","), "--json"],
+        { timeoutMs: MEDIA_SSH_TIMEOUT_MS }
+      );
+      if (sshResult.exitCode !== 0) throw new Error(sshResult.stderr);
+      try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
+      return JSON.parse(sshResult.stdout);
+    }
+    throw new Error("no media download path available");
+  }
+
   // --- wu_messages_send ---
   server.tool(
     "wu_messages_send",
@@ -798,6 +821,7 @@ export function registerTools(
       exclude_reactions: z.boolean().optional().default(false).describe("Skip reaction messages"),
       types: z.array(z.string()).optional().describe("Only export these message types (e.g. text, image, document)"),
       exclude_types: z.array(z.string()).optional().describe("Skip these message types (e.g. sticker, reaction)"),
+      download_media: z.boolean().optional().default(false).describe("Also download image+document media in the window and write a <output>.manifest.jsonl of {msgId,type,sender,timestamp,caption,local_path} so each can be opened directly"),
     },
     async (params) => {
       const cfg = loadConfig();
@@ -815,7 +839,35 @@ export function registerTools(
           types: params.types,
           excludeTypes: params.exclude_types,
         });
-        return jsonResult(result);
+
+        if (!params.download_media) return jsonResult(result);
+
+        // Fetch the window's image/document media, then emit a manifest that
+        // maps each item to its local file.
+        const ids = collectUndownloadedMedia(params.chat, params.after, params.before);
+        let mediaDownloaded = 0;
+        let mediaErrors = 0;
+        if (ids.length > 0) {
+          try {
+            const dl = await downloadMediaForManifest(ids);
+            mediaDownloaded = dl.results.length;
+            mediaErrors = dl.errors.length;
+          } catch (err) {
+            return errorResult(`Export wrote ${result.file}, but media download failed: ${(err as Error).message}`);
+          }
+        }
+        const rows = buildManifest(params.chat, params.after, params.before, MEDIA_DIR);
+        const manifestFile = `${params.output}.manifest.jsonl`;
+        writeManifest(manifestFile, rows);
+
+        return jsonResult({
+          ...result,
+          manifest_file: manifestFile,
+          manifest_rows: rows.length,
+          manifest_resolved: rows.filter((r) => r.local_path).length,
+          media_downloaded: mediaDownloaded,
+          media_errors: mediaErrors,
+        });
       } catch (err) {
         return errorResult((err as Error).message);
       }

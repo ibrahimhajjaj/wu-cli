@@ -8,8 +8,8 @@ import {
   extractAlbumLabel,
 } from "./extract.js";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { writeFileSync, mkdirSync, statSync, openSync, writeSync, closeSync } from "fs";
-import { dirname } from "path";
+import { writeFileSync, mkdirSync, statSync, existsSync, openSync, writeSync, closeSync } from "fs";
+import { dirname, join, basename } from "path";
 
 export interface ExportOptions {
   chatJid: string;
@@ -99,6 +99,92 @@ function escapeCSV(val: string | null): string {
     return `"${s.replace(/"/g, '""')}"`;
   }
   return s;
+}
+
+// --- Media manifest ---
+
+// Media types the manifest links to as standalone files. Image and document
+// carry readable content; stickers, reactions, audio and video are excluded.
+export const MANIFEST_MEDIA_TYPES = ["image", "document"] as const;
+
+export interface ManifestRow {
+  msgId: string;
+  type: string;
+  sender: string | null;
+  timestamp: number;
+  caption: string | null;
+  local_path: string | null;
+}
+
+function windowConditions(chatJid: string, after?: number, before?: number, types?: readonly string[]) {
+  const conditions = ["chat_jid = ?", "media_mime IS NOT NULL"];
+  const params: unknown[] = [chatJid];
+  if (after) { conditions.push("timestamp > ?"); params.push(after); }
+  if (before) { conditions.push("timestamp < ?"); params.push(before); }
+  if (types?.length) {
+    conditions.push(`type IN (${types.map(() => "?").join(", ")})`);
+    params.push(...types);
+  }
+  return { where: conditions.join(" AND "), params };
+}
+
+// msgIds of manifest-eligible media in a window not yet downloaded.
+export function collectUndownloadedMedia(
+  chatJid: string,
+  after?: number,
+  before?: number,
+  types: readonly string[] = MANIFEST_MEDIA_TYPES
+): string[] {
+  const db = getDb();
+  const { where, params } = windowConditions(chatJid, after, before, types);
+  const rows = db
+    .prepare(`SELECT id FROM messages WHERE ${where} AND media_path IS NULL ORDER BY timestamp ASC`)
+    .all(...params) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
+}
+
+// One manifest row per manifest-eligible media item in the window, with local_path
+// resolved against the local media dir (handles the case where media_path was
+// written by the remote daemon and only the basename matches locally).
+export function buildManifest(
+  chatJid: string,
+  after: number | undefined,
+  before: number | undefined,
+  localMediaDir: string,
+  types: readonly string[] = MANIFEST_MEDIA_TYPES
+): ManifestRow[] {
+  const db = getDb();
+  const { where, params } = windowConditions(chatJid, after, before, types);
+  const rows = db
+    .prepare(
+      `SELECT id, type, sender_name, sender_jid, body, timestamp, media_path FROM messages WHERE ${where} ORDER BY timestamp ASC`
+    )
+    .all(...params) as Array<
+      Pick<MessageRow, "id" | "type" | "sender_name" | "sender_jid" | "body" | "timestamp" | "media_path">
+    >;
+
+  return rows.map((r) => {
+    let local: string | null = null;
+    if (r.media_path) {
+      const candidate = existsSync(r.media_path)
+        ? r.media_path
+        : join(localMediaDir, basename(r.media_path));
+      local = existsSync(candidate) ? candidate : null;
+    }
+    return {
+      msgId: r.id,
+      type: r.type,
+      sender: r.sender_name || r.sender_jid,
+      timestamp: r.timestamp,
+      caption: r.body,
+      local_path: local,
+    };
+  });
+}
+
+export function writeManifest(path: string, rows: ManifestRow[]): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""));
 }
 
 export function exportMessages(opts: ExportOptions): ExportResult {

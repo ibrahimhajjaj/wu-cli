@@ -1,7 +1,10 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mediaLabel } from "../src/core/export.js";
+import { mediaLabel, writeManifest, type ManifestRow } from "../src/core/export.js";
 import { serializeWAMessage } from "../src/core/store.js";
+import { readFileSync, rmSync } from "fs";
+import { join } from "path";
+import { tmpdir } from "os";
 
 function raw(message: unknown): string {
   return serializeWAMessage({ key: { id: "x" }, message });
@@ -46,5 +49,34 @@ describe("mediaLabel", () => {
     assert.equal(mediaLabel({ type: "edited", media_mime: null, raw: null }), "[edited]");
     const album = raw({ albumMessage: { expectedImageCount: 2, expectedVideoCount: 1 } });
     assert.equal(mediaLabel({ type: "album", media_mime: null, raw: album }), "[album: 3 items]");
+  });
+});
+
+describe("writeManifest", () => {
+  it("writes one json object per line", () => {
+    const path = join(tmpdir(), `wu-manifest-${process.pid}.jsonl`);
+    const rows: ManifestRow[] = [
+      { msgId: "A", type: "image", sender: "Ali", timestamp: 100, caption: "flyer", local_path: "/m/A.jpg" },
+      { msgId: "B", type: "document", sender: null, timestamp: 200, caption: null, local_path: null },
+    ];
+    try {
+      writeManifest(path, rows);
+      const lines = readFileSync(path, "utf-8").trimEnd().split("\n");
+      assert.equal(lines.length, 2);
+      assert.deepEqual(JSON.parse(lines[0]), rows[0]);
+      assert.deepEqual(JSON.parse(lines[1]), rows[1]);
+    } finally {
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("writes an empty file for no rows", () => {
+    const path = join(tmpdir(), `wu-manifest-empty-${process.pid}.jsonl`);
+    try {
+      writeManifest(path, []);
+      assert.equal(readFileSync(path, "utf-8"), "");
+    } finally {
+      rmSync(path, { force: true });
+    }
   });
 });

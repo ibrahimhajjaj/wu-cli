@@ -101,20 +101,29 @@ export function registerMediaCommand(program: Command): void {
     );
 
   media
-    .command("download-batch <jid>")
+    .command("download-batch [jid]")
     .description("Download undownloaded media in a chat (parallel)")
+    .option("--ids <csv>", "Download specific message IDs (comma-separated) instead of a chat scan")
     .option("--limit <n>", "Max messages to download", "50")
     .option("--concurrency <n>", "Parallel workers", "4")
     .option("--out <dir>", "Output directory")
     .option("--json", "Output as JSON")
     .action(
       async (
-        jid: string,
-        opts: { limit: string; concurrency: string; out?: string; json?: boolean }
+        jid: string | undefined,
+        opts: { ids?: string; limit: string; concurrency: string; out?: string; json?: boolean }
       ) => {
         const config = loadConfig();
         const limit = parseInt(opts.limit, 10);
         const concurrency = parseInt(opts.concurrency, 10);
+        const explicitIds = opts.ids
+          ? opts.ids.split(",").map((s) => s.trim()).filter(Boolean)
+          : undefined;
+
+        if (!explicitIds && !jid) {
+          console.error("Provide a chat JID or --ids");
+          process.exit(EXIT_GENERAL_ERROR);
+        }
 
         const printBatch = ({ results, errors }: BatchResult) => {
           if (opts.json) {
@@ -134,6 +143,7 @@ export function registerMediaCommand(program: Command): void {
           // in a second time.
           if (await daemonIpcAvailable()) {
             const res = await daemonRequest<BatchResult>("media.downloadBatch", {
+              msgIds: explicitIds,
               chat: jid,
               limit,
               concurrency,
@@ -144,6 +154,16 @@ export function registerMediaCommand(program: Command): void {
               return;
             }
             printBatch(res);
+            return;
+          }
+
+          if (explicitIds) {
+            await withConnection(async (sock) => {
+              const { results, errors } = await downloadMediaBatch(
+                explicitIds, sock, config, opts.out, { concurrency }
+              );
+              printBatch({ results, errors });
+            });
             return;
           }
 
