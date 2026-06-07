@@ -155,8 +155,44 @@ const IMAGE_MIME: Record<string, string> = {
   ".gif": "image/gif",
 };
 
-// Anthropic vision: extract text from an image.
+const OCR_PROMPT =
+  "Transcribe all text in this image verbatim, in its original language(s). Output only the text, no commentary.";
+
 async function ocrViaApi(file: string, api: NonNullable<EnrichCapabilityConfig["api"]>): Promise<string> {
+  return api.provider === "openai" ? ocrViaOpenAI(file, api) : ocrViaAnthropic(file, api);
+}
+
+// OpenAI-compatible vision (OpenAI, OpenRouter, ...): chat/completions with an
+// image_url data URL.
+async function ocrViaOpenAI(file: string, api: NonNullable<EnrichCapabilityConfig["api"]>): Promise<string> {
+  const key = process.env[api.key_env]!;
+  const ext = (basename(file).match(/\.[^.]+$/)?.[0] || "").toLowerCase();
+  const media_type = IMAGE_MIME[ext] || "image/jpeg";
+  const data = readFileSync(file).toString("base64");
+  const res = await fetch(`${api.base_url.replace(/\/$/, "")}/chat/completions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      model: api.model,
+      max_tokens: 8192,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: OCR_PROMPT },
+            { type: "image_url", image_url: { url: `data:${media_type};base64,${data}` } },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!res.ok) throw new Error(`OCR API ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  return (json.choices?.[0]?.message?.content || "").trim();
+}
+
+// Anthropic vision: extract text from an image.
+async function ocrViaAnthropic(file: string, api: NonNullable<EnrichCapabilityConfig["api"]>): Promise<string> {
   const key = process.env[api.key_env]!;
   const ext = (basename(file).match(/\.[^.]+$/)?.[0] || "").toLowerCase();
   const media_type = IMAGE_MIME[ext] || "image/jpeg";
@@ -176,7 +212,7 @@ async function ocrViaApi(file: string, api: NonNullable<EnrichCapabilityConfig["
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type, data } },
-            { type: "text", text: "Transcribe all text in this image verbatim, in its original language(s). Output only the text, no commentary." },
+            { type: "text", text: OCR_PROMPT },
           ],
         },
       ],

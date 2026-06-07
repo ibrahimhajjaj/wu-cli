@@ -52,6 +52,10 @@ const EnrichLocal = z.object({
   cmd: z.string(),
 });
 const EnrichApi = z.object({
+  // Request shape: "openai" (chat/completions or audio/transcriptions) or
+  // "anthropic" (messages vision). Defaults to openai for transcribe (only
+  // shape) and anthropic for ocr (set in the capability defaults).
+  provider: z.enum(["openai", "anthropic"]).default("openai"),
   base_url: z.string(),
   key_env: z.string(),
   model: z.string(),
@@ -65,12 +69,12 @@ const EnrichConfig = z.object({
   transcribe: EnrichCapability.default({
     backend: "local",
     local: { cmd: "whisper {input} --model base --output_format txt --output_dir {outdir}" },
-    api: { base_url: "https://api.groq.com/openai/v1", key_env: "GROQ_API_KEY", model: "whisper-large-v3" },
+    api: { provider: "openai", base_url: "https://api.groq.com/openai/v1", key_env: "GROQ_API_KEY", model: "whisper-large-v3" },
   }),
   ocr: EnrichCapability.default({
     backend: "local",
     local: { cmd: "tesseract {input} stdout -l ara+eng" },
-    api: { base_url: "https://api.anthropic.com/v1", key_env: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5-20251001" },
+    api: { provider: "anthropic", base_url: "https://api.anthropic.com/v1", key_env: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5-20251001" },
   }),
 });
 export type EnrichConfig = z.infer<typeof EnrichConfig>;
