@@ -141,8 +141,29 @@ DM JIDs contain the contact's phone number, so they're always constraint-gated r
 | Command | Description |
 |---|---|
 | `wu media download <msg-id>` | Download media from a message |
-| `wu media download-batch <jid>` | Download undownloaded media in parallel |
+| `wu media download-batch [jid]` | Download undownloaded media in parallel (`--ids a,b,c` for specific messages) |
 | `wu media send <jid> <path>` | Send a media file |
+| `wu media transcribe <msg-id>` | Transcribe a voice/audio message to text |
+| `wu media ocr <msg-id>` | Extract text from an image message |
+| `wu media prune` | Delete downloaded media files (`--older-than 30d`, `--chat`, `--dry-run`) |
+
+Transcripts and OCR text are stored on the message and indexed for `wu messages search`.
+
+### Enrichment
+
+Transcription and OCR run through pluggable backends — a local binary (default) or a hosted API. wu bundles no models; install the binary or set an API key.
+
+```bash
+# See which backends are configured and ready, with how to enable them
+wu enrich status
+```
+
+| Capability | Local default | API option |
+|---|---|---|
+| `transcribe` | `whisper` (or whisper.cpp via a custom command) | any OpenAI-compatible audio API (Groq, OpenAI) |
+| `ocr` | `tesseract` (with `ara+eng` data) | Anthropic vision, or any OpenAI-compatible vision API |
+
+Configure under `enrich` in `config.yaml` (see Configuration below).
 
 ### History
 
@@ -252,6 +273,7 @@ The MCP server operates in three modes:
 | Command | Description |
 |---|---|
 | `wu db vacuum` | Run VACUUM and ANALYZE |
+| `wu db reindex` | Rebuild the full-text search index (fixes `database disk image is malformed` on search) |
 
 ## Constraints
 
@@ -316,7 +338,29 @@ db:
 
 log:
   level: info              # debug, info, warn, error
+
+enrich:                    # Media enrichment backends (off until configured)
+  transcribe:
+    backend: local         # local | api | off
+    local:
+      cmd: "whisper {input} --model base --output_format txt --output_dir {outdir}"
+    api:                   # used when backend: api
+      provider: openai     # OpenAI-compatible audio (Groq, OpenAI, ...)
+      base_url: https://api.groq.com/openai/v1
+      key_env: GROQ_API_KEY
+      model: whisper-large-v3
+  ocr:
+    backend: local
+    local:
+      cmd: "tesseract {input} stdout -l ara+eng"
+    api:
+      provider: anthropic  # anthropic (messages vision) | openai (chat vision)
+      base_url: https://api.anthropic.com/v1
+      key_env: ANTHROPIC_API_KEY
+      model: claude-haiku-4-5-20251001
 ```
+
+The local `cmd` runs with `{input}` replaced by the media path; it must either print the text to stdout (e.g. tesseract) or write a `.txt` into `{outdir}` (e.g. whisper). Run `wu enrich status` to see what's detected and how to enable each backend.
 
 All runtime data lives under `~/.wu/` (override with `WU_HOME` env var).
 
@@ -336,7 +380,9 @@ wu messages list 120363XXX@g.us --json --limit 1000
 
 When running `wu mcp`, the following are available to AI agents:
 
-**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_dms_list`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_communities_list`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
+**Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_media_prune`, `wu_media_transcribe`, `wu_media_ocr`, `wu_enrich_status`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_dms_list`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_communities_list`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
+
+`wu_messages_export` takes `download_media: true` to download the window's image/document media and write a `<output>.manifest.jsonl` mapping each item to its local file path.
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 
