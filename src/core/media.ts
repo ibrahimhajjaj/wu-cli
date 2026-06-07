@@ -5,10 +5,11 @@ import {
   type WAMessage,
   type MediaType,
 } from "@whiskeysockets/baileys";
-import { writeFileSync, mkdirSync, statSync, unlinkSync } from "fs";
-import { join, extname } from "path";
+import { writeFileSync, mkdirSync, statSync, unlinkSync, existsSync, readdirSync } from "fs";
+import { join, extname, basename } from "path";
 import type { WuConfig } from "../config/schema.js";
 import { getMessage, upsertMessage, deserializeWAMessage, type MessageRow } from "./store.js";
+import { enrichFile, type Capability } from "./enrich.js";
 import { MEDIA_DIR } from "../config/paths.js";
 import { createChildLogger } from "../config/logger.js";
 import { asyncPool } from "./pool.js";
@@ -178,6 +179,66 @@ export function parseDuration(input: string): number | null {
   const unit = (m[2] || "d").toLowerCase();
   const mult: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
   return n * (mult[unit] ?? 86400);
+}
+
+// Resolve a message's downloaded media to a path that exists on this machine.
+// Handles media_path written by a remote daemon (only the basename matches the
+// local media dir after rsync) and the case where the local row has no
+// media_path yet but the file was rsynced in named by message id.
+export function resolveLocalMediaPath(row: Pick<MessageRow, "id" | "media_path">): string | null {
+  if (row.media_path) {
+    if (existsSync(row.media_path)) return row.media_path;
+    const byBasename = join(MEDIA_DIR, basename(row.media_path));
+    if (existsSync(byBasename)) return byBasename;
+  }
+  // Downloads are written as <msgId><ext>; find it in the media dir by id.
+  try {
+    const match = readdirSync(MEDIA_DIR).find((f) => f.startsWith(`${row.id}.`));
+    if (match) return join(MEDIA_DIR, match);
+  } catch { /* media dir may not exist */ }
+  return null;
+}
+
+export interface EnrichMessageResult {
+  msgId: string;
+  capability: Capability;
+  backend: string;
+  chars: number;
+}
+
+// Extract text from a message's media and persist it. Transcripts and OCR text
+// land in their own columns; for searchability the text is also folded into
+// `body` when the message has none (voice notes), which the FTS triggers index.
+export async function enrichMessage(
+  capability: Capability,
+  msgId: string,
+  config: WuConfig
+): Promise<EnrichMessageResult> {
+  const row = getMessage(msgId);
+  if (!row) throw new Error(`Message not found: ${msgId}`);
+
+  const wantType = capability === "transcribe" ? "audio" : "image";
+  if (row.type !== wantType) {
+    throw new Error(`Message ${msgId} is type '${row.type}', expected '${wantType}'`);
+  }
+
+  const file = resolveLocalMediaPath(row);
+  if (!file) {
+    throw new Error(`Media for ${msgId} is not downloaded locally — download it first`);
+  }
+
+  const text = await enrichFile(capability, file, config.enrich);
+  const column = capability === "transcribe" ? "transcript" : "ocr_text";
+  const db = getDb();
+  if (row.body) {
+    db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(text, msgId);
+  } else {
+    // No caption: fold into body so it shows in exports and the FTS index picks
+    // it up (the messages_fts triggers fire on body updates).
+    db.prepare(`UPDATE messages SET ${column} = ?, body = ? WHERE id = ?`).run(text, text, msgId);
+  }
+
+  return { msgId, capability, backend: config.enrich[capability].backend, chars: text.length };
 }
 
 export interface PruneOptions {

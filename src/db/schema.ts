@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS messages (
     is_from_me INTEGER DEFAULT 0,
     timestamp INTEGER NOT NULL,
     raw TEXT,
+    transcript TEXT,
+    ocr_text TEXT,
     created_at INTEGER DEFAULT (unixepoch())
 );
 

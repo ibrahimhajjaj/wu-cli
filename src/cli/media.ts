@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
-import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration } from "../core/media.js";
+import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage } from "../core/media.js";
+import { EnrichUnavailableError } from "../core/enrich.js";
 import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { sendMedia } from "../core/sender.js";
 import { loadConfig } from "../config/schema.js";
@@ -211,6 +212,30 @@ export function registerMediaCommand(program: Command): void {
         }
       }
     );
+
+  media
+    .command("transcribe <msg-id>")
+    .description("Transcribe a voice/audio message to text (needs a configured backend; see 'wu enrich status')")
+    .option("--json", "Output as JSON")
+    .action(async (msgId: string, opts: { json?: boolean }) => {
+      const config = loadConfig();
+      try {
+        const res = await enrichMessage("transcribe", msgId, config);
+        if (opts.json) {
+          outputResult(res, { json: true });
+        } else {
+          console.log(`Transcribed ${msgId} via ${res.backend} (${res.chars} chars)`);
+        }
+      } catch (err) {
+        if (err instanceof EnrichUnavailableError) {
+          console.error(err.message);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+        const msg = (err as Error).message;
+        console.error(msg);
+        process.exit(msg.includes("not found") ? EXIT_NOT_FOUND : EXIT_GENERAL_ERROR);
+      }
+    });
 
   media
     .command("prune")

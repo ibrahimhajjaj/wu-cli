@@ -35,6 +35,9 @@ export function migrate(db: Database.Database): void {
       if (currentVersion < 3) {
         applyV3(db);
       }
+      if (currentVersion < 4) {
+        applyV4(db);
+      }
       db.prepare("INSERT INTO _migrations (version) VALUES (?)").run(
         SCHEMA_VERSION
       );
@@ -79,6 +82,14 @@ function applyV3(db: Database.Database): void {
       // Leave undecodable rows as unknown.
     }
   }
+}
+
+// Columns for enrichment output: a voice-note transcript and image OCR text.
+function applyV4(db: Database.Database): void {
+  const cols = db.prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+  const has = (n: string) => cols.some((c) => c.name === n);
+  if (!has("transcript")) db.exec("ALTER TABLE messages ADD COLUMN transcript TEXT");
+  if (!has("ocr_text")) db.exec("ALTER TABLE messages ADD COLUMN ocr_text TEXT");
 }
 
 function applyV2(db: Database.Database): void {

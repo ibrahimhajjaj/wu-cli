@@ -43,6 +43,39 @@ const RemoteConfig = z.object({
 });
 export type RemoteConfig = z.infer<typeof RemoteConfig>;
 
+// Enrichment backends. Each capability picks one: a local binary that emits the
+// extracted text on stdout, or a hosted API. Ships defaulting to local so it is
+// free and offline once the binary is installed; the API path is opt-in.
+const EnrichLocal = z.object({
+  // {input} is replaced with the media file path; the command must print the
+  // extracted text to stdout.
+  cmd: z.string(),
+});
+const EnrichApi = z.object({
+  base_url: z.string(),
+  key_env: z.string(),
+  model: z.string(),
+});
+const EnrichCapability = z.object({
+  backend: z.enum(["off", "local", "api"]).default("local"),
+  local: EnrichLocal,
+  api: EnrichApi.optional(),
+});
+const EnrichConfig = z.object({
+  transcribe: EnrichCapability.default({
+    backend: "local",
+    local: { cmd: "whisper {input} --model base --output_format txt --output_dir {outdir}" },
+    api: { base_url: "https://api.groq.com/openai/v1", key_env: "GROQ_API_KEY", model: "whisper-large-v3" },
+  }),
+  ocr: EnrichCapability.default({
+    backend: "local",
+    local: { cmd: "tesseract {input} stdout -l ara+eng" },
+    api: { base_url: "https://api.anthropic.com/v1", key_env: "ANTHROPIC_API_KEY", model: "claude-haiku-4-5-20251001" },
+  }),
+});
+export type EnrichConfig = z.infer<typeof EnrichConfig>;
+export type EnrichCapabilityConfig = z.infer<typeof EnrichCapability>;
+
 export const WuConfigSchema = z.object({
   whatsapp: WhatsAppConfig.default({}),
   constraints: ConstraintsConfig.optional(),
@@ -50,6 +83,7 @@ export const WuConfigSchema = z.object({
   log: LogConfig.default({}),
   remotes: z.record(z.string(), RemoteConfig).optional(),
   default_remote: z.string().optional(),
+  enrich: EnrichConfig.default({}),
 });
 
 export type WuConfig = z.infer<typeof WuConfigSchema>;

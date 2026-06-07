@@ -8,7 +8,8 @@ import { existsSync, unlinkSync } from "fs";
 import { DB_PATH } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
-import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration } from "../core/media.js";
+import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage, resolveLocalMediaPath } from "../core/media.js";
+import { enrichStatus } from "../core/enrich.js";
 import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
@@ -16,7 +17,7 @@ import {
   listChats, listMessages, searchMessages, searchChats,
   listContacts, searchContacts, getGroupParticipants,
   getMessageCount, getMessageContext, upsertMessage,
-  getFilteredMessageCount,
+  getFilteredMessageCount, getMessage,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, buildManifest, writeManifest } from "../core/export.js";
@@ -1041,6 +1042,38 @@ export function registerTools(
       }
       try {
         return jsonResult(pruneMedia({ olderThanSec, chatJid: params.chat, dryRun: params.dry_run }));
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
+  // --- wu_enrich_status ---
+  server.tool(
+    "wu_enrich_status",
+    "Show which media-enrichment backends (transcription, OCR) are configured and ready, with exact steps to enable any that are off. Check this before transcribe/OCR.",
+    {},
+    async () => {
+      return jsonResult({ backends: enrichStatus(config.enrich) });
+    }
+  );
+
+  // --- wu_media_transcribe ---
+  server.tool(
+    "wu_media_transcribe",
+    "Transcribe a voice/audio message to text (stored on the message and made searchable). Downloads the audio first if needed. Requires a configured transcribe backend — see wu_enrich_status.",
+    {
+      message_id: z.string().describe("ID of an audio/voice message"),
+    },
+    async (params) => {
+      try {
+        // Make sure the audio is on this machine (transcription runs here).
+        const row = getMessage(params.message_id);
+        if (row && !resolveLocalMediaPath(row)) {
+          try { await downloadMediaForManifest([params.message_id]); } catch { /* enrichMessage will report a clear error */ }
+        }
+        const result = await enrichMessage("transcribe", params.message_id, config);
+        return jsonResult(result);
       } catch (err) {
         return errorResult((err as Error).message);
       }
