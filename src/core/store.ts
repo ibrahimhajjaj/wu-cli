@@ -335,7 +335,7 @@ export function searchMessages(
     try {
       return db
         .prepare(
-          `SELECT m.*, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet, rank
+          `SELECT m.*, snippet(messages_fts, -1, '>>>', '<<<', '...', 40) AS snippet, rank
            FROM messages_fts
            JOIN messages m ON m.rowid = messages_fts.rowid
            WHERE ${conditions.join(" AND ")}${chatFilter}

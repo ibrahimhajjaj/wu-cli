@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { WAMessage } from "@whiskeysockets/baileys";
-import { CREATE_TABLES_SQL, SCHEMA_VERSION } from "./schema.js";
+import { CREATE_TABLES_SQL, FTS_SQL, SCHEMA_VERSION } from "./schema.js";
 import {
   getMessageContent,
   extractMessageType,
@@ -37,6 +37,9 @@ export function migrate(db: Database.Database): void {
       }
       if (currentVersion < 4) {
         applyV4(db);
+      }
+      if (currentVersion < 5) {
+        applyV5(db);
       }
       db.prepare("INSERT INTO _migrations (version) VALUES (?)").run(
         SCHEMA_VERSION
@@ -82,6 +85,20 @@ function applyV3(db: Database.Database): void {
       // Leave undecodable rows as unknown.
     }
   }
+}
+
+// Re-index FTS over body + transcript + ocr_text (so enrichment text is
+// searchable) and replace the old triggers, whose plain DELETE on the
+// external-content table left the index corrupt. Rebuild from scratch.
+function applyV5(db: Database.Database): void {
+  db.exec(`
+    DROP TRIGGER IF EXISTS messages_fts_insert;
+    DROP TRIGGER IF EXISTS messages_fts_update;
+    DROP TRIGGER IF EXISTS messages_fts_delete;
+    DROP TABLE IF EXISTS messages_fts;
+  `);
+  db.exec(FTS_SQL);
+  db.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
 }
 
 // Columns for enrichment output: a voice-note transcript and image OCR text.

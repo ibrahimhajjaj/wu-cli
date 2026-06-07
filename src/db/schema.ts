@@ -1,4 +1,34 @@
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
+
+// FTS5 over the searchable text columns (external content table). Deletes use
+// the 'delete' command with the OLD values — a plain DELETE can't locate the
+// indexed terms and leaves the index corrupt (breaks ORDER BY rank).
+export const FTS_SQL = `
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    body,
+    transcript,
+    ocr_text,
+    content=messages,
+    content_rowid=rowid
+);
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, body, transcript, ocr_text)
+    VALUES (new.rowid, new.body, new.transcript, new.ocr_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, body, transcript, ocr_text)
+    VALUES ('delete', old.rowid, old.body, old.transcript, old.ocr_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF body, transcript, ocr_text ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, body, transcript, ocr_text)
+    VALUES ('delete', old.rowid, old.body, old.transcript, old.ocr_text);
+    INSERT INTO messages_fts(rowid, body, transcript, ocr_text)
+    VALUES (new.rowid, new.body, new.transcript, new.ocr_text);
+END;
+`;
 
 export const CREATE_TABLES_SQL = `
 CREATE TABLE IF NOT EXISTS messages (
@@ -33,27 +63,8 @@ CREATE INDEX IF NOT EXISTS idx_msg_body ON messages(body) WHERE body IS NOT NULL
 CREATE INDEX IF NOT EXISTS idx_msg_sender ON messages(sender_jid, timestamp);
 CREATE INDEX IF NOT EXISTS idx_msg_type ON messages(type);
 
--- FTS5 full-text search (external content, synced via triggers)
-CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-    body,
-    content=messages,
-    content_rowid=rowid
-);
-
-CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages
-WHEN NEW.body IS NOT NULL BEGIN
-    INSERT INTO messages_fts(rowid, body) VALUES (NEW.rowid, NEW.body);
-END;
-
-CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF body ON messages BEGIN
-    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
-    INSERT INTO messages_fts(rowid, body)
-        SELECT NEW.rowid, NEW.body WHERE NEW.body IS NOT NULL;
-END;
-
-CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
-    DELETE FROM messages_fts WHERE rowid = OLD.rowid;
-END;
+-- FTS5 full-text search (external content, synced via triggers) — see FTS_SQL
+${FTS_SQL}
 
 CREATE TABLE IF NOT EXISTS chats (
     jid TEXT PRIMARY KEY,
