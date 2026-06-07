@@ -1080,6 +1080,27 @@ export function registerTools(
     }
   );
 
+  // --- wu_media_ocr ---
+  server.tool(
+    "wu_media_ocr",
+    "Extract text from an image message (stored on the message and made searchable). Downloads the image first if needed. Requires a configured ocr backend — see wu_enrich_status.",
+    {
+      message_id: z.string().describe("ID of an image message"),
+    },
+    async (params) => {
+      try {
+        const row = getMessage(params.message_id);
+        if (row && !resolveLocalMediaPath(row)) {
+          try { await downloadMediaForManifest([params.message_id]); } catch { /* enrichMessage will report a clear error */ }
+        }
+        const result = await enrichMessage("ocr", params.message_id, config);
+        return jsonResult(result);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
+    }
+  );
+
   // --- wu_groups_rename ---
   server.tool(
     "wu_groups_rename",

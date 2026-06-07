@@ -238,6 +238,30 @@ export function registerMediaCommand(program: Command): void {
     });
 
   media
+    .command("ocr <msg-id>")
+    .description("Extract text from an image message (needs a configured backend; see 'wu enrich status')")
+    .option("--json", "Output as JSON")
+    .action(async (msgId: string, opts: { json?: boolean }) => {
+      const config = loadConfig();
+      try {
+        const res = await enrichMessage("ocr", msgId, config);
+        if (opts.json) {
+          outputResult(res, { json: true });
+        } else {
+          console.log(`OCR'd ${msgId} via ${res.backend} (${res.chars} chars)`);
+        }
+      } catch (err) {
+        if (err instanceof EnrichUnavailableError) {
+          console.error(err.message);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+        const msg = (err as Error).message;
+        console.error(msg);
+        process.exit(msg.includes("not found") ? EXIT_NOT_FOUND : EXIT_GENERAL_ERROR);
+      }
+    });
+
+  media
     .command("prune")
     .description("Delete downloaded media files (keeps the DB/exports; bytes are disposable)")
     .option("--older-than <dur>", "Only prune media older than this (e.g. 30d, 12h, 2w)")
