@@ -332,19 +332,25 @@ export function searchMessages(
     }
     params.push(limit);
 
-    return db
-      .prepare(
-        `SELECT m.*, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet, rank
-         FROM messages_fts
-         JOIN messages m ON m.rowid = messages_fts.rowid
-         WHERE ${conditions.join(" AND ")}${chatFilter}
-         ORDER BY rank
-         LIMIT ?`
-      )
-      .all(...params) as SearchResult[];
+    try {
+      return db
+        .prepare(
+          `SELECT m.*, snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet, rank
+           FROM messages_fts
+           JOIN messages m ON m.rowid = messages_fts.rowid
+           WHERE ${conditions.join(" AND ")}${chatFilter}
+           ORDER BY rank
+           LIMIT ?`
+        )
+        .all(...params) as SearchResult[];
+    } catch {
+      // A corrupt FTS index throws "database disk image is malformed" on the
+      // ranked read; fall back to a LIKE scan so search still returns results.
+      // `wu db reindex` rebuilds the index to restore ranked search.
+    }
   }
 
-  // Fallback: LIKE search (pre-FTS DBs)
+  // Fallback: LIKE search (pre-FTS DBs, or a corrupt FTS index)
   const conditions = ["body LIKE ?"];
   const params: unknown[] = [`%${query}%`];
   if (opts?.chatJid) {

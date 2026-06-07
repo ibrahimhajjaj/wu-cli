@@ -29,6 +29,26 @@ export function registerDbCommand(program: Command): void {
       console.log("Done.");
     });
 
+  db.command("reindex")
+    .description("Rebuild the full-text search index (fixes 'database disk image is malformed' on search)")
+    .action(() => {
+      const database = getDb();
+      console.log("Rebuilding search index...");
+      database.exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+      database.pragma("wal_checkpoint(TRUNCATE)");
+      // Confirm the rank-sorted read path (the one that fails on a corrupt
+      // index) works now.
+      try {
+        database.prepare(
+          "SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'a' ORDER BY rank LIMIT 1"
+        ).get();
+        console.log("Done — search index rebuilt and verified.");
+      } catch (err) {
+        console.error(`Rebuilt, but a ranked read still failed: ${(err as Error).message}`);
+      }
+      closeDb();
+    });
+
   db.command("reset")
     .description("Delete the database and start fresh")
     .option("-y, --yes", "Skip confirmation")
