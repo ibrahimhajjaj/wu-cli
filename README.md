@@ -382,7 +382,7 @@ When running `wu mcp`, the following are available to AI agents:
 
 **Tools:** `wu_messages_send`, `wu_react`, `wu_media_download`, `wu_media_download_batch`, `wu_media_prune`, `wu_media_transcribe`, `wu_media_ocr`, `wu_enrich_status`, `wu_messages_search`, `wu_messages_list`, `wu_messages_context`, `wu_messages_count`, `wu_messages_export`, `wu_history_backfill`, `wu_chats_list`, `wu_chats_search`, `wu_dms_list`, `wu_contacts_list`, `wu_contacts_search`, `wu_groups_list`, `wu_groups_info`, `wu_groups_invite`, `wu_groups_create`, `wu_groups_leave`, `wu_groups_rename`, `wu_groups_join`, `wu_communities_list`, `wu_constraints_list`, `wu_constraints_set`, `wu_constraints_remove`, `wu_constraints_default`, `wu_config_show`, `wu_status`
 
-`wu_messages_export` takes `download_media: true` to download the window's image/document media and write a `<output>.manifest.jsonl` mapping each item to its local file path.
+`wu_messages_export` takes `download_media: true` to download the window's image/document media and write a `<output>.manifest.jsonl` mapping each item to its local file path. Add `enrich: true` to also OCR images and transcribe audio in the same pass, writing the text onto each message and into the manifest rows (`ocr_text`, `transcript`). Enrichment respects the configured backends — a disabled one is skipped and reported, never fatal.
 
 **Resources:** `wu://chats`, `wu://chats/{jid}/messages`, `wu://contacts`, `wu://contacts/{jid}`, `wu://groups`, `wu://groups/{jid}`, `wu://status`
 
