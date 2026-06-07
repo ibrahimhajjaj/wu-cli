@@ -9,7 +9,8 @@ import { DB_PATH } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage, resolveLocalMediaPath } from "../core/media.js";
-import { enrichStatus } from "../core/enrich.js";
+import { enrichStatus, resolveBackend, type Capability } from "../core/enrich.js";
+import { asyncPool } from "../core/pool.js";
 import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
@@ -20,7 +21,7 @@ import {
   getFilteredMessageCount, getMessage,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
-import { exportMessages, collectUndownloadedMedia, buildManifest, writeManifest } from "../core/export.js";
+import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
 import { MEDIA_DIR } from "../config/paths.js";
 
@@ -66,6 +67,61 @@ export function registerTools(
       return JSON.parse(sshResult.stdout);
     }
     throw new Error("no media download path available");
+  }
+
+  // Concurrency for the enrichment pass. Local backends shell out via a
+  // blocking call so they run effectively serially regardless; this only
+  // parallelises hosted-API backends.
+  const ENRICH_CONCURRENCY = 3;
+
+  interface EnrichCapabilitySummary {
+    backend: string;
+    available: boolean;
+    enriched: number;
+    skipped: number;
+    errors: number;
+    detail?: string;
+  }
+
+  // Run OCR over the window's images and transcription over its audio, writing
+  // the text onto each message (already-enriched items are skipped). A disabled
+  // or unconfigured backend is reported, never fatal.
+  async function enrichWindow(
+    chatJid: string,
+    after: number | undefined,
+    before: number | undefined
+  ): Promise<Record<Capability, EnrichCapabilitySummary>> {
+    const summary = {} as Record<Capability, EnrichCapabilitySummary>;
+
+    for (const capability of ["transcribe", "ocr"] as Capability[]) {
+      const status = resolveBackend(capability, config.enrich);
+      const targets = collectEnrichTargets(chatJid, capability, after, before);
+
+      if (!status.available) {
+        summary[capability] = {
+          backend: status.backend,
+          available: false,
+          enriched: 0,
+          skipped: targets.length,
+          errors: 0,
+          detail: `${status.detail}. ${status.enable_hint}`.trim(),
+        };
+        continue;
+      }
+
+      const pool = await asyncPool(targets, ENRICH_CONCURRENCY, (msgId) =>
+        enrichMessage(capability, msgId, config)
+      );
+      summary[capability] = {
+        backend: status.backend,
+        available: true,
+        enriched: pool.filter((r) => r.status === "fulfilled").length,
+        skipped: 0,
+        errors: pool.filter((r) => r.status === "rejected").length,
+      };
+    }
+
+    return summary;
   }
 
   // --- wu_messages_send ---
@@ -822,7 +878,8 @@ export function registerTools(
       exclude_reactions: z.boolean().optional().default(false).describe("Skip reaction messages"),
       types: z.array(z.string()).optional().describe("Only export these message types (e.g. text, image, document)"),
       exclude_types: z.array(z.string()).optional().describe("Skip these message types (e.g. sticker, reaction)"),
-      download_media: z.boolean().optional().default(false).describe("Also download image+document media in the window and write a <output>.manifest.jsonl of {msgId,type,sender,timestamp,caption,local_path} so each can be opened directly"),
+      download_media: z.boolean().optional().default(false).describe("Also download image+document media in the window and write a <output>.manifest.jsonl of {msgId,type,sender,timestamp,caption,local_path,ocr_text,transcript} so each can be opened directly"),
+      enrich: z.boolean().optional().default(false).describe("In the same pass, OCR images and transcribe audio (also downloads audio), writing the text onto each message and into the manifest. Implies download_media. Uses the configured enrich backends (see wu_enrich_status); a disabled backend is skipped, not fatal."),
     },
     async (params) => {
       const cfg = loadConfig();
@@ -841,11 +898,14 @@ export function registerTools(
           excludeTypes: params.exclude_types,
         });
 
-        if (!params.download_media) return jsonResult(result);
+        if (!params.download_media && !params.enrich) return jsonResult(result);
 
-        // Fetch the window's image/document media, then emit a manifest that
-        // maps each item to its local file.
+        // Download the window's media. Images + documents always; audio too when
+        // enriching, since transcription needs the bytes locally.
         const ids = collectUndownloadedMedia(params.chat, params.after, params.before);
+        if (params.enrich) {
+          ids.push(...collectUndownloadedMedia(params.chat, params.after, params.before, ["audio"]));
+        }
         let mediaDownloaded = 0;
         let mediaErrors = 0;
         if (ids.length > 0) {
@@ -857,7 +917,14 @@ export function registerTools(
             return errorResult(`Export wrote ${result.file}, but media download failed: ${(err as Error).message}`);
           }
         }
-        const rows = buildManifest(params.chat, params.after, params.before, MEDIA_DIR);
+
+        // Enrich (OCR/transcribe) after the bytes are local.
+        const enrichment = params.enrich
+          ? await enrichWindow(params.chat, params.after, params.before)
+          : undefined;
+
+        const manifestTypes = params.enrich ? ENRICH_MANIFEST_MEDIA_TYPES : undefined;
+        const rows = buildManifest(params.chat, params.after, params.before, MEDIA_DIR, manifestTypes);
         const manifestFile = `${params.output}.manifest.jsonl`;
         writeManifest(manifestFile, rows);
 
@@ -868,6 +935,7 @@ export function registerTools(
           manifest_resolved: rows.filter((r) => r.local_path).length,
           media_downloaded: mediaDownloaded,
           media_errors: mediaErrors,
+          ...(enrichment ? { enrichment } : {}),
         });
       } catch (err) {
         return errorResult((err as Error).message);

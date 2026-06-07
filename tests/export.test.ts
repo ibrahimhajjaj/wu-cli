@@ -56,8 +56,8 @@ describe("writeManifest", () => {
   it("writes one json object per line", () => {
     const path = join(tmpdir(), `wu-manifest-${process.pid}.jsonl`);
     const rows: ManifestRow[] = [
-      { msgId: "A", type: "image", sender: "Ali", timestamp: 100, caption: "flyer", local_path: "/m/A.jpg" },
-      { msgId: "B", type: "document", sender: null, timestamp: 200, caption: null, local_path: null },
+      { msgId: "A", type: "image", sender: "Ali", timestamp: 100, caption: "flyer", local_path: "/m/A.jpg", ocr_text: "IELTS exemption", transcript: null },
+      { msgId: "B", type: "audio", sender: null, timestamp: 200, caption: null, local_path: "/m/B.ogg", ocr_text: null, transcript: "deadline is friday" },
     ];
     try {
       writeManifest(path, rows);

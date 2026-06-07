@@ -114,6 +114,8 @@ export interface ManifestRow {
   timestamp: number;
   caption: string | null;
   local_path: string | null;
+  ocr_text: string | null;
+  transcript: string | null;
 }
 
 function windowConditions(chatJid: string, after?: number, before?: number, types?: readonly string[]) {
@@ -157,10 +159,11 @@ export function buildManifest(
   const { where, params } = windowConditions(chatJid, after, before, types);
   const rows = db
     .prepare(
-      `SELECT id, type, sender_name, sender_jid, body, timestamp, media_path FROM messages WHERE ${where} ORDER BY timestamp ASC`
+      `SELECT id, type, sender_name, sender_jid, body, timestamp, media_path, ocr_text, transcript FROM messages WHERE ${where} ORDER BY timestamp ASC`
     )
     .all(...params) as Array<
-      Pick<MessageRow, "id" | "type" | "sender_name" | "sender_jid" | "body" | "timestamp" | "media_path">
+      Pick<MessageRow, "id" | "type" | "sender_name" | "sender_jid" | "body" | "timestamp" | "media_path"> &
+        { ocr_text: string | null; transcript: string | null }
     >;
 
   return rows.map((r) => {
@@ -178,8 +181,33 @@ export function buildManifest(
       timestamp: r.timestamp,
       caption: r.body,
       local_path: local,
+      ocr_text: r.ocr_text,
+      transcript: r.transcript,
     };
   });
+}
+
+// Media types worth pulling back as files for the manifest, plus audio when the
+// caller also wants transcripts.
+export const ENRICH_MANIFEST_MEDIA_TYPES = ["image", "document", "audio"] as const;
+
+// msgIds in a window that still need enrichment: images without ocr_text (for
+// ocr), audio without transcript (for transcribe). The column name is a fixed
+// literal, never caller input.
+export function collectEnrichTargets(
+  chatJid: string,
+  capability: "ocr" | "transcribe",
+  after?: number,
+  before?: number
+): string[] {
+  const type = capability === "ocr" ? "image" : "audio";
+  const column = capability === "ocr" ? "ocr_text" : "transcript";
+  const db = getDb();
+  const { where, params } = windowConditions(chatJid, after, before, [type]);
+  const rows = db
+    .prepare(`SELECT id FROM messages WHERE ${where} AND ${column} IS NULL ORDER BY timestamp ASC`)
+    .all(...params) as Array<{ id: string }>;
+  return rows.map((r) => r.id);
 }
 
 export function writeManifest(path: string, rows: ManifestRow[]): void {
