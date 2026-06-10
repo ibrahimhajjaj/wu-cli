@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mediaLabel, writeManifest, type ManifestRow } from "../src/core/export.js";
+import { mediaLabel, writeManifest, quotedSnippet, type ManifestRow } from "../src/core/export.js";
 import { serializeWAMessage } from "../src/core/store.js";
 import { readFileSync, rmSync } from "fs";
 import { join } from "path";
@@ -49,6 +49,32 @@ describe("mediaLabel", () => {
     assert.equal(mediaLabel({ type: "edited", media_mime: null, raw: null }), "[edited]");
     const album = raw({ albumMessage: { expectedImageCount: 2, expectedVideoCount: 1 } });
     assert.equal(mediaLabel({ type: "album", media_mime: null, raw: album }), "[album: 3 items]");
+  });
+});
+
+describe("quotedSnippet", () => {
+  it("uses sender name and clips long bodies at 60 chars", () => {
+    const s = quotedSnippet({
+      sender_name: "Ali", sender_jid: "1@s.whatsapp.net", type: "text",
+      media_mime: null, raw: null, body: "x".repeat(80),
+    });
+    assert.equal(s, `Ali: ${"x".repeat(60)}…`);
+  });
+
+  it("collapses newlines in the quoted body", () => {
+    const s = quotedSnippet({
+      sender_name: null, sender_jid: "2@s.whatsapp.net", type: "text",
+      media_mime: null, raw: null, body: "line one\nline two",
+    });
+    assert.equal(s, "2@s.whatsapp.net: line one line two");
+  });
+
+  it("falls back to the media label when there is no body", () => {
+    const s = quotedSnippet({
+      sender_name: "Dona", sender_jid: null, type: "image",
+      media_mime: "image/jpeg", raw: null, body: null,
+    });
+    assert.equal(s, "Dona: [image]");
   });
 });
 

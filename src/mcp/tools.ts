@@ -21,7 +21,7 @@ import {
   getFilteredMessageCount, getMessage,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
-import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
+import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
 import { MEDIA_DIR } from "../config/paths.js";
 
@@ -67,6 +67,14 @@ export function registerTools(
       return JSON.parse(sshResult.stdout);
     }
     throw new Error("no media download path available");
+  }
+
+  // Resolve a quoted message id to a "sender: first chars" reference, or null
+  // when there is nothing to resolve (one indexed lookup per reply row).
+  function resolveQuoted(quotedId: string | null): string | null {
+    if (!quotedId) return null;
+    const q = getMessage(quotedId);
+    return q ? quotedSnippet(q) : null;
   }
 
   // Concurrency for the enrichment pass. Local backends shell out via a
@@ -403,6 +411,8 @@ export function registerTools(
             snippet: r.snippet,
             type: r.type,
             timestamp: r.timestamp,
+            quoted_id: r.quoted_id,
+            quoted_snippet: resolveQuoted(r.quoted_id),
           }))
         );
       } catch (err) {
@@ -829,6 +839,8 @@ export function registerTools(
           body: m.body,
           type: m.type,
           timestamp: m.timestamp,
+          quoted_id: m.quoted_id,
+          quoted_snippet: resolveQuoted(m.quoted_id),
         });
         return jsonResult({
           chat_jid: result.target.chat_jid,

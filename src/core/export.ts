@@ -78,6 +78,17 @@ export function mediaLabel(
   }
 }
 
+// One-line reference to a quoted message: "sender: first ~60 chars". Media
+// without a caption falls back to its label so a reply to a flyer still reads.
+export function quotedSnippet(
+  q: Pick<MessageRow, "sender_name" | "sender_jid" | "type" | "media_mime" | "raw" | "body">
+): string {
+  const sender = q.sender_name || q.sender_jid || "unknown";
+  const text = q.body ? q.body.replace(/\s+/g, " ").trim() : mediaLabel(q);
+  const clipped = text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  return `${sender}: ${clipped}`;
+}
+
 export interface ExportResult {
   messages_exported: number;
   file: string;
@@ -289,6 +300,9 @@ export function exportMessages(opts: ExportOptions): ExportResult {
   );
 
   let currentDay = "";
+  const quotedStmt = db.prepare(
+    "SELECT sender_name, sender_jid, type, media_mime, raw, body FROM messages WHERE id = ?"
+  );
   let batch: (MessageRow & { rowid: number })[];
 
   // First batch
@@ -342,12 +356,20 @@ export function exportMessages(opts: ExportOptions): ExportResult {
           }
           const time = date.toTimeString().slice(0, 5);
           const sender = row.sender_name || row.sender_jid || (row.is_from_me ? "Me" : "Unknown");
+          // Replies reference what they answer; one indexed lookup per reply row.
+          let reply = "";
+          if (row.quoted_id) {
+            const q = quotedStmt.get(row.quoted_id) as
+              | Pick<MessageRow, "sender_name" | "sender_jid" | "type" | "media_mime" | "raw" | "body">
+              | undefined;
+            if (q) reply = `↩ to ${quotedSnippet(q)}\n`;
+          }
           if (row.type === "text") {
-            w(`### ${time} — ${sender}\n${row.body || ""}\n\n`);
+            w(`### ${time} — ${sender}\n${reply}${row.body || ""}\n\n`);
           } else {
             // Media/other: distinct label, with caption appended when present
             const caption = row.body ? ` ${row.body}` : "";
-            w(`### ${time} — ${sender}\n${mediaLabel(row)}${caption}\n\n`);
+            w(`### ${time} — ${sender}\n${reply}${mediaLabel(row)}${caption}\n\n`);
           }
           break;
         }
