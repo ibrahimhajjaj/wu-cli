@@ -27,6 +27,10 @@ const WhatsAppConfig = z.object({
   // DMs are always constraint-gated regardless of this flag because DM JIDs
   // contain the contact's phone number.
   group_discovery: z.boolean().default(true),
+  // Daemon watchdog: if the socket is believed open but no event of any kind
+  // has arrived for this many seconds, force a reconnect. Guards against a
+  // half-dead stream that never fires a connection.update close. 0 disables.
+  watchdog_stale_seconds: z.number().default(900),
 });
 
 const DbConfig = z.object({

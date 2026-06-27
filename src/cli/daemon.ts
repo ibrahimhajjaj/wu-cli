@@ -5,11 +5,12 @@ import { homedir } from "os";
 import { unlinkSync } from "fs";
 import { ReconnectingConnection } from "../core/connection.js";
 import { startListener } from "../core/listener.js";
+import { DaemonState } from "../core/daemon-state.js";
 import { startDaemonIpc } from "../core/ipc.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
-import { getMessageCount } from "../core/store.js";
+import { getMessageCount, getStoreHealth } from "../core/store.js";
 import { generateDaemonService, resolveWuBin, checkLinger } from "../core/systemd.js";
 import { EXIT_CONNECTION_FAILED, EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
@@ -27,19 +28,24 @@ async function runDaemon(): Promise<void> {
 
   const config = loadConfig();
   const startTime = Date.now();
+  const state = new DaemonState();
 
   const conn = new ReconnectingConnection({
     isDaemon: true,
     quiet: true,
     onReady: (sock) => {
       log("● Connected — collecting messages");
-      startListener(sock, { config, quiet: true });
+      state.setOpen();
+      state.attach(sock);
+      startListener(sock, { config, quiet: true, onMessage: () => state.markMessage() });
     },
-    onDisconnect: () => {
+    onDisconnect: (reason) => {
       log("⚠ Disconnected — waiting for reconnection");
+      state.setClosed(reason);
     },
     onReconnecting: (delayMs) => {
       log(`● Reconnecting in ${(delayMs / 1000).toFixed(0)}s...`);
+      state.setConnecting();
     },
     onFatal: (reason) => {
       log(`✗ ${reason}`);
@@ -51,8 +57,27 @@ async function runDaemon(): Promise<void> {
     const mem = process.memoryUsage();
     const uptimeH = ((Date.now() - startTime) / 3600000).toFixed(1);
     const msgs = getMessageCount();
-    log(`♥ RSS: ${(mem.rss / 1048576).toFixed(0)}MB | Heap: ${(mem.heapUsed / 1048576).toFixed(0)}MB | Uptime: ${uptimeH}h | Messages: ${msgs}`);
+    const age = state.streamAge();
+    const ageStr = age == null ? "n/a" : `${age}s`;
+    log(`♥ RSS: ${(mem.rss / 1048576).toFixed(0)}MB | Heap: ${(mem.heapUsed / 1048576).toFixed(0)}MB | Uptime: ${uptimeH}h | Messages: ${msgs} | Last event: ${ageStr} ago`);
   }, 5 * 60 * 1000);
+
+  // Watchdog: a half-dead socket can keep reporting "open" while the event
+  // stream silently stops. If nothing arrives for the configured window while
+  // believed-open, cycle the connection so the reconnect path re-establishes it.
+  const staleSeconds = config.whatsapp.watchdog_stale_seconds;
+  const watchdogInterval = setInterval(() => {
+    state.recordStoreHealth(getStoreHealth());
+    state.flush(); // keep updated_at fresh so "process alive, stream dead" is visible
+    if (staleSeconds <= 0 || !state.isOpen()) return;
+    const age = state.streamAge();
+    if (age != null && age >= staleSeconds) {
+      log(`⚠ No events for ${age}s (threshold ${staleSeconds}s): restarting stream`);
+      state.markWatchdogRestart();
+      conn.forceReconnect(`watchdog: stream stale for ${age}s`);
+    }
+  }, 60 * 1000);
+  watchdogInterval.unref?.();
 
   // IPC server — lets CLI/MCP media downloads reuse this live socket instead
   // of opening a second WhatsApp login (which would collide and drop both).
@@ -62,6 +87,8 @@ async function runDaemon(): Promise<void> {
   const shutdown = async () => {
     log("● Shutting down...");
     clearInterval(healthInterval);
+    clearInterval(watchdogInterval);
+    state.stop();
     stopIpc();
     await conn.stop();
     closeDb();

@@ -527,7 +527,12 @@ export function registerTools(
               daemon_running?: boolean;
               phone?: string;
               name?: string;
+              stream?: unknown;
             };
+            // The remote daemon's live stream/ingestion health. `connected`
+            // alone only proves the process is up; `stream.stale` or
+            // `stream.store_healthy === false` is how a daemon that is "up" but
+            // no longer persisting messages shows itself.
             return jsonResult({
               mode: "remote",
               remote_name: remote.name,
@@ -536,8 +541,9 @@ export function registerTools(
               authenticated: !!remoteStatus.authenticated,
               remote_phone: remoteStatus.phone,
               remote_name_display: remoteStatus.name,
+              stream: remoteStatus.stream ?? null,
               messages_stored,
-              note: "Reads served from local synced DB; writes are SSH'd to the remote daemon. messages_stored reflects last sync, not current remote state.",
+              note: "Reads served from local synced DB; writes are SSH'd to the remote daemon. messages_stored reflects last sync, not current remote state. Check stream.stale / stream.store_healthy for live ingestion health, not just connected.",
               timestamp: Date.now(),
             });
           }

@@ -9,6 +9,7 @@ export const CONFIG_PATH = join(WU_HOME, "config.yaml");
 export const MEDIA_DIR = join(WU_HOME, "media");
 export const LOCK_PATH = join(WU_HOME, "wu.lock");
 export const DAEMON_SOCK_PATH = join(WU_HOME, "daemon.sock");
+export const DAEMON_STATE_PATH = join(WU_HOME, "daemon-state.json");
 
 export function ensureWuHome(): void {
   mkdirSync(WU_HOME, { recursive: true });
