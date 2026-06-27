@@ -92,11 +92,75 @@ export function deserializeWAMessage(raw: string): unknown {
   });
 }
 
+// --- FTS write-path resilience ---
+//
+// Message writes pass through the messages_fts AFTER INSERT trigger. A corrupt
+// FTS index ("database disk image is malformed") makes that trigger throw,
+// which aborts the whole INSERT. In the daemon those throws are swallowed by
+// the event-handler guard, so a one-off corruption silently stops ingestion
+// for good while the socket stays healthy. Recover in place: rebuild the index
+// from the content table once and retry, so a transient corruption self-heals
+// instead of stalling writes forever. The read path already degrades to LIKE;
+// this gives the write path the same tolerance.
+
+let _ftsRebuilds = 0;
+let _lastStoreErrorAt: number | null = null;
+let _lastStoreError: string | null = null;
+
+export interface StoreHealth {
+  fts_rebuilds: number;
+  last_store_error_at: number | null;
+  last_store_error: string | null;
+}
+
+export function getStoreHealth(): StoreHealth {
+  return {
+    fts_rebuilds: _ftsRebuilds,
+    last_store_error_at: _lastStoreErrorAt,
+    last_store_error: _lastStoreError,
+  };
+}
+
+export function rebuildFtsIndex(): void {
+  getDb().exec("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')");
+  _ftsAvailable = undefined; // force a re-probe on next read
+}
+
+function isMalformedError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /malformed|disk image|SQLITE_CORRUPT/i.test(msg);
+}
+
+// Exported for tests. Production callers use it implicitly via the message
+// upserts; the recovery is the same regardless of caller.
+export function withFtsRecovery<T>(fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    if (!isMalformedError(err)) throw err;
+    try {
+      rebuildFtsIndex();
+      _ftsRebuilds++;
+    } catch (rebuildErr) {
+      _lastStoreErrorAt = Math.floor(Date.now() / 1000);
+      _lastStoreError = `fts rebuild failed: ${(rebuildErr as Error).message}`;
+      throw err;
+    }
+    try {
+      return fn();
+    } catch (retryErr) {
+      _lastStoreErrorAt = Math.floor(Date.now() / 1000);
+      _lastStoreError = (retryErr as Error).message;
+      throw retryErr;
+    }
+  }
+}
+
 // --- Single-row upserts ---
 
 export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
   const db = getDb();
-  db.prepare(`
+  const stmt = db.prepare(`
     INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
     VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
     ON CONFLICT(id) DO UPDATE SET
@@ -109,7 +173,8 @@ export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
       media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
       media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
       raw = COALESCE(excluded.raw, messages.raw)
-  `).run(row);
+  `);
+  withFtsRecovery(() => stmt.run(row));
 }
 
 export type ChatUpsert = Omit<
@@ -198,11 +263,12 @@ export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void
       media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
       raw = COALESCE(excluded.raw, messages.raw)
   `);
-  db.transaction(() => {
+  const tx = db.transaction(() => {
     for (const row of rows) {
       stmt.run(row);
     }
-  })();
+  });
+  withFtsRecovery(() => tx());
 }
 
 export function bulkUpsertChats(rows: ChatUpsert[]): void {
