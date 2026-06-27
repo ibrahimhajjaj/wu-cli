@@ -210,11 +210,14 @@ export class ReconnectingConnection {
   private flushCreds: (() => Promise<void>) | undefined;
   private backoff = 2000;
   private maxBackoff = 60000;
+  // After this many fast retries the backoff stops growing. A one-shot command
+  // gives up here; the daemon instead drops to a long cooldown and keeps going.
   private consecutiveFailures = 0;
   private maxFailures = 10;
+  private coolDownBackoff = 300000;
   private stopped = false;
   private onReady?: (sock: WASocket) => void;
-  private onDisconnect?: () => void;
+  private onDisconnect?: (reason: number) => void;
   private isDaemon: boolean;
 
   private quiet: boolean;
@@ -225,7 +228,7 @@ export class ReconnectingConnection {
     isDaemon?: boolean;
     quiet?: boolean;
     onReady?: (sock: WASocket) => void;
-    onDisconnect?: () => void;
+    onDisconnect?: (reason: number) => void;
     onReconnecting?: (delayMs: number) => void;
     onFatal?: (reason: string) => void;
   }) {
@@ -251,12 +254,28 @@ export class ReconnectingConnection {
         this.onReady?.(sock);
       },
       onClose: async (_reason, willReconnect) => {
-        this.onDisconnect?.();
+        this.onDisconnect?.(_reason);
         if (willReconnect && !this.stopped) {
           this.consecutiveFailures++;
           if (this.consecutiveFailures >= this.maxFailures) {
-            this.onFatal?.("Too many consecutive failures — giving up");
-            if (!this.quiet) logger.error("Too many consecutive failures — giving up");
+            // A non-daemon (one-shot CLI) gives up so it can't loop forever.
+            // The daemon is a long-lived collector: a brief WhatsApp outage
+            // must not retire it permanently. Keep retrying on a long cooldown
+            // so it recovers on its own once service returns.
+            if (!this.isDaemon) {
+              this.onFatal?.("Too many consecutive failures — giving up");
+              if (!this.quiet) logger.error("Too many consecutive failures — giving up");
+              return;
+            }
+            this.onReconnecting?.(this.coolDownBackoff);
+            if (!this.quiet)
+              logger.warn(
+                { delay: this.coolDownBackoff, failures: this.consecutiveFailures },
+                "Retry ceiling hit, cooling down but still retrying"
+              );
+            setTimeout(() => {
+              if (!this.stopped) this.connect().catch(() => {});
+            }, this.coolDownBackoff);
             return;
           }
           const delay =
@@ -279,6 +298,15 @@ export class ReconnectingConnection {
     this.flushCreds = flushCreds;
     await waitForConnection(sock);
     return sock;
+  }
+
+  // End the current socket so the existing close/reconnect path runs. Used by
+  // the daemon watchdog when the stream goes silent but the socket never
+  // reported itself closed.
+  forceReconnect(reason: string): void {
+    if (this.stopped || !this.sock) return;
+    if (!this.quiet) logger.warn({ reason }, "Forcing reconnect");
+    this.sock.end(new Error(reason));
   }
 
   async stop(): Promise<void> {
