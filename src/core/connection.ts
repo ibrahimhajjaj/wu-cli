@@ -12,6 +12,11 @@ import { createChildLogger } from "../config/logger.js";
 
 const logger = createChildLogger("connection");
 const silentLogger = pino({ level: "silent" });
+// Baileys' own logs are too noisy at info to run in the daemon, but at warn
+// they carry the signals we otherwise have to infer: account restrictions
+// (error 463), stream errors, ack failures. The daemon takes this instead of
+// silencing Baileys outright, so a future restriction lands in the journal.
+const baileysWarnLogger = pino({ level: "warn" });
 
 import { createRequire } from "node:module";
 const _require = createRequire(import.meta.url);
@@ -48,7 +53,7 @@ export async function createConnection(
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  const log = opts.quiet ? silentLogger : logger;
+  const log = opts.quiet ? (opts.isDaemon ? baileysWarnLogger : silentLogger) : logger;
 
   const sock = makeWASocket({
     auth: {
