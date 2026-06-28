@@ -63,13 +63,29 @@ async function runDaemon(): Promise<void> {
   }, 5 * 60 * 1000);
 
   // Watchdog: a half-dead socket can keep reporting "open" while the event
-  // stream silently stops. If nothing arrives for the configured window while
-  // believed-open, cycle the connection so the reconnect path re-establishes it.
+  // stream silently stops. Two cases:
+  //   1. The WebSocket itself dropped but no connection.update close fired, so
+  //      the reconnect path never engaged. Catch this immediately off the ws
+  //      state, which a quiet account never trips, only a genuinely dead socket.
+  //   2. The ws still reports open but no frames arrive (deaf stream). Only this
+  //      case needs the silence timer, kept long so an overnight-quiet account
+  //      is not churned (each needless reconnect re-runs history sync).
   const staleSeconds = config.whatsapp.watchdog_stale_seconds;
   const watchdogInterval = setInterval(() => {
     state.recordStoreHealth(getStoreHealth());
     state.flush(); // keep updated_at fresh so "process alive, stream dead" is visible
-    if (staleSeconds <= 0 || !state.isOpen()) return;
+    if (!state.isOpen()) return;
+
+    const sock = conn.getSock();
+    const wsOpen = (sock?.ws as { isOpen?: boolean } | undefined)?.isOpen ?? true;
+    if (!wsOpen) {
+      log("⚠ Socket dropped without a close event: restarting stream");
+      state.markWatchdogRestart();
+      conn.forceReconnect("watchdog: socket closed without notice");
+      return;
+    }
+
+    if (staleSeconds <= 0) return;
     const age = state.streamAge();
     if (age != null && age >= staleSeconds) {
       log(`⚠ No events for ${age}s (threshold ${staleSeconds}s): restarting stream`);

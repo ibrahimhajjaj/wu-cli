@@ -28,9 +28,12 @@ const WhatsAppConfig = z.object({
   // contain the contact's phone number.
   group_discovery: z.boolean().default(true),
   // Daemon watchdog: if the socket is believed open but no event of any kind
-  // has arrived for this many seconds, force a reconnect. Guards against a
-  // half-dead stream that never fires a connection.update close. 0 disables.
-  watchdog_stale_seconds: z.number().default(900),
+  // has arrived for this many seconds, force a reconnect. Backstop for a
+  // deaf-but-open stream; a genuinely dropped socket is caught immediately via
+  // its WebSocket state, so this only needs to cover the rare silent-open case.
+  // Kept generous so a legitimately quiet account (overnight) is not churned.
+  // 0 disables.
+  watchdog_stale_seconds: z.number().default(1800),
 });
 
 const DbConfig = z.object({
