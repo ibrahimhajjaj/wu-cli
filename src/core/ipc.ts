@@ -3,8 +3,8 @@ import { existsSync, unlinkSync, chmodSync } from "fs";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { DAEMON_SOCK_PATH } from "../config/paths.js";
-import { getDb } from "../db/database.js";
 import { downloadMedia, downloadMediaBatch } from "./media.js";
+import { collectUndownloadedMedia } from "./export.js";
 import { createChildLogger } from "../config/logger.js";
 
 const logger = createChildLogger("ipc");
@@ -123,12 +123,7 @@ async function dispatch(
         if (!chat) throw new Error("Provide msgIds or chat");
         const limitRaw = Number(params.limit ?? 50);
         const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50;
-        const rows = getDb()
-          .prepare(
-            "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
-          )
-          .all(chat, limit) as Array<{ id: string }>;
-        ids = rows.map((r) => r.id);
+        ids = collectUndownloadedMedia(chat, undefined, undefined, [], { limit, order: "desc" });
       }
       if (ids.length === 0) return { results: [], errors: [] };
       const outDir = params.outDir ? String(params.outDir) : undefined;

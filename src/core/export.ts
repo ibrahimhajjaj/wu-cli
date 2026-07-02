@@ -141,18 +141,24 @@ function windowConditions(chatJid: string, after?: number, before?: number, type
   return { where: conditions.join(" AND "), params };
 }
 
-// msgIds of manifest-eligible media in a window not yet downloaded.
+// msgIds of manifest-eligible media in a window not yet downloaded. An empty
+// `types` array (vs. the default) drops the type filter entirely - used by
+// the MCP batch-download path, which wants any undownloaded media, not just
+// the manifest-eligible subset.
 export function collectUndownloadedMedia(
   chatJid: string,
   after?: number,
   before?: number,
-  types: readonly string[] = MANIFEST_MEDIA_TYPES
+  types: readonly string[] = MANIFEST_MEDIA_TYPES,
+  opts?: { limit?: number; order?: "asc" | "desc" }
 ): string[] {
   const db = getDb();
   const { where, params } = windowConditions(chatJid, after, before, types);
-  const rows = db
-    .prepare(`SELECT id FROM messages WHERE ${where} AND media_path IS NULL ORDER BY timestamp ASC`)
-    .all(...params) as Array<{ id: string }>;
+  const order = opts?.order === "desc" ? "DESC" : "ASC";
+  const limitClause = opts?.limit ? " LIMIT ?" : "";
+  const sql = `SELECT id FROM messages WHERE ${where} AND media_path IS NULL ORDER BY timestamp ${order}${limitClause}`;
+  const bound = opts?.limit ? [...params, opts.limit] : params;
+  const rows = db.prepare(sql).all(...bound) as Array<{ id: string }>;
   return rows.map((r) => r.id);
 }
 
