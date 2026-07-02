@@ -337,7 +337,18 @@ function canUseFts(db: Database.Database): boolean {
 
 export function searchMessages(
   query: string,
-  opts?: { chatJid?: string; senderJid?: string; limit?: number; after?: number; before?: number }
+  opts?: {
+    chatJid?: string;
+    senderJid?: string;
+    limit?: number;
+    after?: number;
+    before?: number;
+    // Constraint predicate over `chat_jid` (see
+    // core/constraints.ts:constraintSqlPredicate). Pushing this into the
+    // query means the LIMIT above is applied to already-visible rows, so
+    // callers stop needing to over-fetch and filter/slice in JS.
+    visiblePredicate?: SqlPredicate;
+  }
 ): SearchResult[] {
   const db = getDb();
   const limit = opts?.limit || 50;
@@ -363,6 +374,10 @@ export function searchMessages(
     if (opts?.before) {
       chatFilter += " AND m.timestamp < ?";
       params.push(opts.before);
+    }
+    if (opts?.visiblePredicate) {
+      chatFilter += ` AND (${opts.visiblePredicate.sql})`;
+      params.push(...opts.visiblePredicate.params);
     }
     params.push(limit);
 
@@ -402,6 +417,10 @@ export function searchMessages(
   if (opts?.before) {
     conditions.push("timestamp < ?");
     params.push(opts.before);
+  }
+  if (opts?.visiblePredicate) {
+    conditions.push(`(${opts.visiblePredicate.sql})`);
+    params.push(...opts.visiblePredicate.params);
   }
   params.push(limit);
   const rows = db
@@ -480,6 +499,101 @@ export function searchChats(query: string, opts?: { limit?: number }): ChatRow[]
       "SELECT * FROM chats WHERE name LIKE ? ORDER BY last_message_at DESC NULLS LAST LIMIT ?"
     )
     .all(`%${query}%`, opts?.limit || 100) as ChatRow[];
+}
+
+// --- Constraint-aware / bounded read variants ---
+//
+// These take a pre-built SQL predicate (see
+// core/constraints.ts:constraintSqlPredicate) rather than importing from
+// core/constraints.ts - store.ts stays a pure query builder with no opinion
+// on what "visible" means, only how to filter by an arbitrary boolean
+// expression. core/service.ts is what wires the two together. Each function
+// below pushes both the filter AND the LIMIT into SQLite, replacing the old
+// `list*({ limit: 10000 }).filter(shouldCollect).slice(limit)` pattern that
+// over-fetched from every call site.
+
+export interface SqlPredicate {
+  sql: string;
+  params: unknown[];
+}
+
+export function listChatsWhere(
+  predicate: SqlPredicate,
+  opts?: { limit?: number }
+): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT * FROM chats WHERE ${predicate.sql} ORDER BY last_message_at DESC NULLS LAST LIMIT ?`
+    )
+    .all(...predicate.params, opts?.limit || 100) as ChatRow[];
+}
+
+export function listDmsWhere(
+  predicate: SqlPredicate,
+  opts?: { limit?: number }
+): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT * FROM chats WHERE type = 'dm' AND ${predicate.sql} ORDER BY last_message_at DESC NULLS LAST LIMIT ?`
+    )
+    .all(...predicate.params, opts?.limit || 100) as ChatRow[];
+}
+
+export function listGroupsWhere(
+  predicate: SqlPredicate,
+  opts?: { limit?: number; order?: "recency" | "name" }
+): ChatRow[] {
+  const db = getDb();
+  const orderBy =
+    opts?.order === "recency"
+      ? "last_message_at DESC NULLS LAST"
+      : "is_community DESC, COALESCE(name, jid) ASC";
+  return db
+    .prepare(
+      `SELECT * FROM chats WHERE type = 'group' AND ${predicate.sql} ORDER BY ${orderBy} LIMIT ?`
+    )
+    .all(...predicate.params, opts?.limit || 1000) as ChatRow[];
+}
+
+export function searchChatsWhere(
+  query: string,
+  predicate: SqlPredicate,
+  opts?: { limit?: number }
+): ChatRow[] {
+  const db = getDb();
+  return db
+    .prepare(
+      `SELECT * FROM chats WHERE name LIKE ? AND ${predicate.sql} ORDER BY last_message_at DESC NULLS LAST LIMIT ?`
+    )
+    .all(`%${query}%`, ...predicate.params, opts?.limit || 100) as ChatRow[];
+}
+
+export function getChatByJid(jid: string): ChatRow | undefined {
+  const db = getDb();
+  return db.prepare("SELECT * FROM chats WHERE jid = ?").get(jid) as
+    | ChatRow
+    | undefined;
+}
+
+// Groups whose linked_parent is one of the given community jids - used to
+// resolve subgroups for a (bounded) page of communities without fetching
+// every group in the DB.
+export function listGroupsByLinkedParent(
+  parentJids: string[],
+  order: "recency" | "name" = "name"
+): ChatRow[] {
+  if (parentJids.length === 0) return [];
+  const db = getDb();
+  const placeholders = parentJids.map(() => "?").join(",");
+  const orderBy =
+    order === "recency" ? "last_message_at DESC NULLS LAST" : "COALESCE(name, jid) ASC";
+  return db
+    .prepare(
+      `SELECT * FROM chats WHERE type = 'group' AND linked_parent IN (${placeholders}) ORDER BY ${orderBy}`
+    )
+    .all(...parentJids) as ChatRow[];
 }
 
 export function listContacts(opts?: { limit?: number }): ContactRow[] {
