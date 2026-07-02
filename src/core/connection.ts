@@ -121,7 +121,7 @@ export async function createConnection(
   return { sock, saveCreds: debouncedSaveCreds, flushCreds };
 }
 
-function handleDisconnect(log: pino.Logger, statusCode: number, isDaemon?: boolean): boolean {
+export function handleDisconnect(log: pino.Logger, statusCode: number, isDaemon?: boolean): boolean {
   switch (statusCode) {
     case DisconnectReason.loggedOut:
       log.error("Logged out — need to re-login with `wu login`");
