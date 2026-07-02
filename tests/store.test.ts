@@ -228,36 +228,13 @@ describe("SQLite store operations", () => {
   });
 });
 
-describe("getMessagesByIds", () => {
+// getMessagesByIds and prepareCached both need the real singleton (WU_HOME,
+// db path, and the ESM module itself are fixed at whichever import happens
+// first in this process), so they share one handle under a parent describe
+// instead of each trying to point the singleton at its own throwaway home.
+describe("store singleton (real schema)", () => {
   let store: typeof import("../src/core/store.js");
   let database: typeof import("../src/db/database.js");
-
-  function row(id: string, overrides: Partial<Parameters<typeof store.upsertMessage>[0]> = {}) {
-    return {
-      id,
-      chat_jid: "chat@g.us",
-      sender_jid: "sender@s.whatsapp.net",
-      sender_name: "Tester",
-      body: `body for ${id}`,
-      type: "text",
-      media_mime: null,
-      media_path: null,
-      media_size: null,
-      media_direct_path: null,
-      media_key: null,
-      media_file_sha256: null,
-      media_file_enc_sha256: null,
-      media_file_length: null,
-      quoted_id: null,
-      location_lat: null,
-      location_lon: null,
-      location_name: null,
-      is_from_me: 0,
-      timestamp: 1782291384,
-      raw: "{}",
-      ...overrides,
-    };
-  }
 
   before(async () => {
     process.env.WU_HOME = batchLookupHome;
@@ -272,28 +249,93 @@ describe("getMessagesByIds", () => {
     rmSync(batchLookupHome, { recursive: true, force: true });
   });
 
-  it("returns an empty Map for empty input", () => {
-    const map = store.getMessagesByIds([]);
-    assert.equal(map.size, 0);
+  describe("getMessagesByIds", () => {
+    function row(id: string, overrides: Partial<Parameters<typeof store.upsertMessage>[0]> = {}) {
+      return {
+        id,
+        chat_jid: "chat@g.us",
+        sender_jid: "sender@s.whatsapp.net",
+        sender_name: "Tester",
+        body: `body for ${id}`,
+        type: "text",
+        media_mime: null,
+        media_path: null,
+        media_size: null,
+        media_direct_path: null,
+        media_key: null,
+        media_file_sha256: null,
+        media_file_enc_sha256: null,
+        media_file_length: null,
+        quoted_id: null,
+        location_lat: null,
+        location_lon: null,
+        location_name: null,
+        is_from_me: 0,
+        timestamp: 1782291384,
+        raw: "{}",
+        ...overrides,
+      };
+    }
+
+    it("returns an empty Map for empty input", () => {
+      const map = store.getMessagesByIds([]);
+      assert.equal(map.size, 0);
+    });
+
+    it("fetches the matching rows and omits missing ids", () => {
+      store.upsertMessage(row("id1"));
+      store.upsertMessage(row("id2"));
+      store.upsertMessage(row("id3"));
+
+      const map = store.getMessagesByIds(["id1", "id3", "missing"]);
+      assert.equal(map.size, 2);
+      assert.equal(map.get("id1")?.body, "body for id1");
+      assert.equal(map.get("id3")?.body, "body for id3");
+      assert.equal(map.has("id2"), false);
+      assert.equal(map.has("missing"), false);
+    });
+
+    it("dedupes repeated ids without duplicating rows or throwing", () => {
+      store.upsertMessage(row("dup1"));
+      const map = store.getMessagesByIds(["dup1", "dup1", "dup1"]);
+      assert.equal(map.size, 1);
+      assert.equal(map.get("dup1")?.body, "body for dup1");
+    });
   });
 
-  it("fetches the matching rows and omits missing ids", () => {
-    store.upsertMessage(row("id1"));
-    store.upsertMessage(row("id2"));
-    store.upsertMessage(row("id3"));
+  describe("prepareCached across a reloadDb() handle swap", () => {
+    it("keeps working after reloadDb() swaps the handle", () => {
+      // Warm the cache on the first handle via a store helper that uses
+      // prepareCached (upsertContact -> CONTACT_UPSERT_SQL).
+      store.upsertContact({
+        jid: "a@s.whatsapp.net",
+        phone: "1",
+        push_name: "A",
+        saved_name: null,
+        is_business: 0,
+      });
+      assert.equal(store.listContacts().length, 1);
 
-    const map = store.getMessagesByIds(["id1", "id3", "missing"]);
-    assert.equal(map.size, 2);
-    assert.equal(map.get("id1")?.body, "body for id1");
-    assert.equal(map.get("id3")?.body, "body for id3");
-    assert.equal(map.has("id2"), false);
-    assert.equal(map.has("missing"), false);
-  });
+      // Swap the handle, as `wu_db_reset`/remote sync does. The db file on disk
+      // is unchanged, so the row from before the swap is still there.
+      database.reloadDb();
 
-  it("dedupes repeated ids without duplicating rows or throwing", () => {
-    store.upsertMessage(row("dup1"));
-    const map = store.getMessagesByIds(["dup1", "dup1", "dup1"]);
-    assert.equal(map.size, 1);
-    assert.equal(map.get("dup1")?.body, "body for dup1");
+      // A statement cached against the old (now-closed) handle must not leak
+      // into the new one - this would throw "database connection is not open"
+      // if the WeakMap keying or the closeDb() reset didn't work.
+      assert.doesNotThrow(() => {
+        store.upsertContact({
+          jid: "b@s.whatsapp.net",
+          phone: "2",
+          push_name: "B",
+          saved_name: null,
+          is_business: 0,
+        });
+      });
+      assert.equal(store.listContacts().length, 2, "reopened handle sees prior data plus the new row");
+
+      // Direct prepareCached reuse on the new handle also works.
+      assert.doesNotThrow(() => database.prepareCached("SELECT 1").get());
+    });
   });
 });

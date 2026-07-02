@@ -13,7 +13,7 @@ import { enrichFile, type Capability } from "./enrich.js";
 import { MEDIA_DIR } from "../config/paths.js";
 import { createChildLogger } from "../config/logger.js";
 import { asyncPool } from "./pool.js";
-import { getDb } from "../db/database.js";
+import { getDb, prepareCached } from "../db/database.js";
 
 const logger = createChildLogger("media");
 
@@ -250,14 +250,15 @@ export async function enrichMessage(
 
   const text = await enrichFile(capability, file, config.enrich);
   const column = capability === "transcribe" ? "transcript" : "ocr_text";
-  const db = getDb();
   if (row.body) {
-    withFtsRecovery(() => db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(text, msgId));
+    withFtsRecovery(() =>
+      prepareCached(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(text, msgId)
+    );
   } else {
     // No caption: fold into body so it shows in exports and the FTS index picks
     // it up (the messages_fts triggers fire on body updates).
     withFtsRecovery(() =>
-      db.prepare(`UPDATE messages SET ${column} = ?, body = ? WHERE id = ?`).run(text, text, msgId)
+      prepareCached(`UPDATE messages SET ${column} = ?, body = ? WHERE id = ?`).run(text, text, msgId)
     );
   }
 

@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import { getDb } from "../db/database.js";
+import { getDb, prepareCached } from "../db/database.js";
 
 // --- Type definitions ---
 
@@ -174,8 +174,7 @@ const MESSAGE_UPSERT_SQL = `
 `;
 
 export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
-  const db = getDb();
-  const stmt = db.prepare(MESSAGE_UPSERT_SQL);
+  const stmt = prepareCached(MESSAGE_UPSERT_SQL);
   withFtsRecovery(() => stmt.run(row));
 }
 
@@ -205,7 +204,6 @@ const CHAT_UPSERT_SQL = `
 `;
 
 export function upsertChat(row: ChatUpsert): void {
-  const db = getDb();
   const params = {
     last_seen_at: null,
     is_community: null,
@@ -213,7 +211,7 @@ export function upsertChat(row: ChatUpsert): void {
     linked_parent: null,
     ...row,
   };
-  db.prepare(CHAT_UPSERT_SQL).run(params);
+  prepareCached(CHAT_UPSERT_SQL).run(params);
 }
 
 const CONTACT_UPSERT_SQL = `
@@ -228,8 +226,7 @@ const CONTACT_UPSERT_SQL = `
 `;
 
 export function upsertContact(row: Omit<ContactRow, "updated_at">): void {
-  const db = getDb();
-  db.prepare(CONTACT_UPSERT_SQL).run(row);
+  prepareCached(CONTACT_UPSERT_SQL).run(row);
 }
 
 export function upsertGroupParticipants(
@@ -255,7 +252,7 @@ export function upsertGroupParticipants(
 export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(MESSAGE_UPSERT_SQL);
+  const stmt = prepareCached(MESSAGE_UPSERT_SQL);
   const tx = db.transaction(() => {
     for (const row of rows) {
       stmt.run(row);
@@ -267,7 +264,7 @@ export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void
 export function bulkUpsertChats(rows: ChatUpsert[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(CHAT_UPSERT_SQL);
+  const stmt = prepareCached(CHAT_UPSERT_SQL);
   db.transaction(() => {
     for (const row of rows) {
       stmt.run({
@@ -284,7 +281,7 @@ export function bulkUpsertChats(rows: ChatUpsert[]): void {
 export function bulkUpsertContacts(rows: Omit<ContactRow, "updated_at">[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(CONTACT_UPSERT_SQL);
+  const stmt = prepareCached(CONTACT_UPSERT_SQL);
   db.transaction(() => {
     for (const row of rows) {
       stmt.run(row);
@@ -417,8 +414,7 @@ export function searchMessages(
 }
 
 export function getMessage(id: string): MessageRow | undefined {
-  const db = getDb();
-  return db.prepare("SELECT * FROM messages WHERE id = ?").get(id) as
+  return prepareCached("SELECT * FROM messages WHERE id = ?").get(id) as
     | MessageRow
     | undefined;
 }
@@ -515,8 +511,7 @@ export function getGroupParticipants(
 }
 
 export function getMessageCount(): number {
-  const db = getDb();
-  const row = db.prepare("SELECT COUNT(*) as count FROM messages").get() as {
+  const row = prepareCached("SELECT COUNT(*) as count FROM messages").get() as {
     count: number;
   };
   return row.count;
