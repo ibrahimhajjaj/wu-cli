@@ -24,6 +24,7 @@ import { registerMcpCommand } from "./mcp.js";
 import { registerHistoryCommand } from "./history.js";
 import { registerRemoteCommand } from "./remote.js";
 import { registerSyncCommand } from "./sync.js";
+import { registerDoctorCommand } from "./doctor.js";
 import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
 const program = new Command();
@@ -54,6 +55,7 @@ registerDbCommand(program);
 registerMcpCommand(program);
 registerRemoteCommand(program);
 registerSyncCommand(program);
+registerDoctorCommand(program);
 
 try {
   await program.parseAsync(process.argv);
