@@ -18,7 +18,7 @@ import {
   listChats, listMessages, searchMessages, searchChats,
   listContacts, searchContacts, getGroupParticipants,
   getMessageCount, getMessageContext, upsertMessage,
-  getFilteredMessageCount, getMessage,
+  getFilteredMessageCount, getMessage, getMessagesByIds,
 } from "../core/store.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
@@ -67,14 +67,6 @@ export function registerTools(
       return JSON.parse(sshResult.stdout);
     }
     throw new Error("no media download path available");
-  }
-
-  // Resolve a quoted message id to a "sender: first chars" reference, or null
-  // when there is nothing to resolve (one indexed lookup per reply row).
-  function resolveQuoted(quotedId: string | null): string | null {
-    if (!quotedId) return null;
-    const q = getMessage(quotedId);
-    return q ? quotedSnippet(q) : null;
   }
 
   // Concurrency for the enrichment pass. Local backends shell out via a
@@ -402,6 +394,13 @@ export function registerTools(
           before: params.before,
         });
         const results = allResults.filter((r) => shouldCollect(r.chat_jid, cfg)).slice(0, params.limit);
+        const quotedIds = results.map((r) => r.quoted_id).filter((x): x is string => !!x);
+        const quotedMap = getMessagesByIds(quotedIds);
+        const snippetFor = (qid: string | null) => {
+          if (!qid) return null;
+          const q = quotedMap.get(qid);
+          return q ? quotedSnippet(q) : null;
+        };
         return jsonResult(
           results.map((r) => ({
             id: r.id,
@@ -412,7 +411,7 @@ export function registerTools(
             type: r.type,
             timestamp: r.timestamp,
             quoted_id: r.quoted_id,
-            quoted_snippet: resolveQuoted(r.quoted_id),
+            quoted_snippet: snippetFor(r.quoted_id),
           }))
         );
       } catch (err) {
@@ -838,6 +837,14 @@ export function registerTools(
           afterCount: params.after,
         });
         if (!result) return errorResult(`Message not found: ${params.message_id}`);
+        const allRows = [result.target, ...result.before, ...result.after];
+        const quotedIds = allRows.map((m) => m.quoted_id).filter((x): x is string => !!x);
+        const quotedMap = getMessagesByIds(quotedIds);
+        const snippetFor = (qid: string | null) => {
+          if (!qid) return null;
+          const q = quotedMap.get(qid);
+          return q ? quotedSnippet(q) : null;
+        };
         const fmt = (m: any) => ({
           id: m.id,
           sender: m.sender_jid,
@@ -846,7 +853,7 @@ export function registerTools(
           type: m.type,
           timestamp: m.timestamp,
           quoted_id: m.quoted_id,
-          quoted_snippet: resolveQuoted(m.quoted_id),
+          quoted_snippet: snippetFor(m.quoted_id),
         });
         return jsonResult({
           chat_jid: result.target.chat_jid,

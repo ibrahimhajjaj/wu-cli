@@ -1,13 +1,18 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
+import { describe, it, before, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import Database from "better-sqlite3";
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { FifoDedup } from "../src/core/dedup.js";
 
 // We test the dedup module directly since the store module depends on the
 // singleton database. For store operations, we'd need to inject the db.
+
+// Point the singleton DB at a throwaway home before importing the store, so
+// getMessagesByIds runs against the real schema (see fts-recovery.test.ts for
+// the same pattern).
+const batchLookupHome = mkdtempSync(join(tmpdir(), "wu-getmsgs-"));
 
 describe("FifoDedup", () => {
   it("should track added keys", () => {
@@ -220,5 +225,75 @@ describe("SQLite store operations", () => {
       .all("group@g.us") as any[];
     assert.equal(p.length, 1);
     assert.equal(p[0].is_admin, 1);
+  });
+});
+
+describe("getMessagesByIds", () => {
+  let store: typeof import("../src/core/store.js");
+  let database: typeof import("../src/db/database.js");
+
+  function row(id: string, overrides: Partial<Parameters<typeof store.upsertMessage>[0]> = {}) {
+    return {
+      id,
+      chat_jid: "chat@g.us",
+      sender_jid: "sender@s.whatsapp.net",
+      sender_name: "Tester",
+      body: `body for ${id}`,
+      type: "text",
+      media_mime: null,
+      media_path: null,
+      media_size: null,
+      media_direct_path: null,
+      media_key: null,
+      media_file_sha256: null,
+      media_file_enc_sha256: null,
+      media_file_length: null,
+      quoted_id: null,
+      location_lat: null,
+      location_lon: null,
+      location_name: null,
+      is_from_me: 0,
+      timestamp: 1782291384,
+      raw: "{}",
+      ...overrides,
+    };
+  }
+
+  before(async () => {
+    process.env.WU_HOME = batchLookupHome;
+    mkdirSync(join(batchLookupHome, "auth"), { recursive: true });
+    database = await import("../src/db/database.js");
+    store = await import("../src/core/store.js");
+    database.getDb(); // creates schema
+  });
+
+  after(() => {
+    database.closeDb();
+    rmSync(batchLookupHome, { recursive: true, force: true });
+  });
+
+  it("returns an empty Map for empty input", () => {
+    const map = store.getMessagesByIds([]);
+    assert.equal(map.size, 0);
+  });
+
+  it("fetches the matching rows and omits missing ids", () => {
+    store.upsertMessage(row("id1"));
+    store.upsertMessage(row("id2"));
+    store.upsertMessage(row("id3"));
+
+    const map = store.getMessagesByIds(["id1", "id3", "missing"]);
+    assert.equal(map.size, 2);
+    assert.equal(map.get("id1")?.body, "body for id1");
+    assert.equal(map.get("id3")?.body, "body for id3");
+    assert.equal(map.has("id2"), false);
+    assert.equal(map.has("missing"), false);
+  });
+
+  it("dedupes repeated ids without duplicating rows or throwing", () => {
+    store.upsertMessage(row("dup1"));
+    const map = store.getMessagesByIds(["dup1", "dup1", "dup1"]);
+    assert.equal(map.size, 1);
+    assert.equal(map.get("dup1")?.body, "body for dup1");
   });
 });

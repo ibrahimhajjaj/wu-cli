@@ -452,6 +452,24 @@ export function getMessage(id: string): MessageRow | undefined {
     | undefined;
 }
 
+export function getMessagesByIds(ids: string[]): Map<string, MessageRow> {
+  const out = new Map<string, MessageRow>();
+  const unique = [...new Set(ids.filter((id): id is string => !!id))];
+  if (unique.length === 0) return out;
+  const db = getDb();
+  // SQLite has a variable limit (default 999); chunk to stay well under it.
+  const CHUNK = 500;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const chunk = unique.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => "?").join(", ");
+    const rows = db
+      .prepare(`SELECT * FROM messages WHERE id IN (${placeholders})`)
+      .all(...chunk) as MessageRow[];
+    for (const r of rows) out.set(r.id, r);
+  }
+  return out;
+}
+
 export function listChats(opts?: { limit?: number }): ChatRow[] {
   const db = getDb();
   return db
