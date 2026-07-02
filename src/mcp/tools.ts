@@ -23,7 +23,7 @@ import {
 } from "../core/store.js";
 import {
   listChatsForConfig, searchChatsForConfig, listDmsForConfig,
-  listMessagesForConfig, searchMessagesForConfig,
+  listMessagesForConfig, searchMessagesForConfig, listCommunitiesForConfig,
 } from "../core/service.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
@@ -699,19 +699,11 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      const allChats = listChats({ limit: 10000 });
-      const parents = allChats.filter((c) => c.type === "group" && c.is_community === 1).slice(0, params.limit);
-
-      const childrenByParent = new Map<string, typeof allChats>();
-      if (params.with_subgroups) {
-        for (const c of allChats) {
-          if (c.linked_parent) {
-            const list = childrenByParent.get(c.linked_parent) || [];
-            list.push(c);
-            childrenByParent.set(c.linked_parent, list);
-          }
-        }
-      }
+      const { parents, childrenByParent } = listCommunitiesForConfig(cfg, {
+        limit: params.limit,
+        withSubgroups: params.with_subgroups,
+        order: "recency",
+      });
 
       return jsonResult(
         parents.map((p) => ({
