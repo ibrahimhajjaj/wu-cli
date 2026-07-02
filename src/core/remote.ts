@@ -3,6 +3,7 @@ import { existsSync, renameSync, unlinkSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { WuConfig, RemoteConfig } from "../config/schema.js";
 import { WU_HOME } from "../config/paths.js";
+import { closeDb, reloadDb } from "../db/database.js";
 
 // --- Shell escaping (POSIX-safe) ---
 
@@ -124,17 +125,24 @@ export async function syncDb(
     const remoteHas = await sshRawExec(remote, "which sqlite3-rsync");
     if (remoteHas.exitCode === 0) {
       const remoteDbPath = `${remote.wu_home}/wu.db`;
-      return new Promise((resolve, reject) => {
-        execFile(
-          "sqlite3-rsync",
-          [`${remote.host}:${remoteDbPath}`, localDbPath],
-          { timeout: 120_000 },
-          (err) => {
-            if (err) reject(new Error(`sqlite3-rsync failed: ${(err as Error).message}`));
-            else resolve({ method: "sqlite3-rsync" });
-          },
-        );
-      });
+      // Close any open local handle before the in-place write so an in-process
+      // reader (daemon / long-lived MCP server) can't see a half-written DB.
+      closeDb();
+      try {
+        return await new Promise((resolve, reject) => {
+          execFile(
+            "sqlite3-rsync",
+            [`${remote.host}:${remoteDbPath}`, localDbPath],
+            { timeout: 120_000 },
+            (err) => {
+              if (err) reject(new Error(`sqlite3-rsync failed: ${(err as Error).message}`));
+              else resolve({ method: "sqlite3-rsync" });
+            },
+          );
+        });
+      } finally {
+        reloadDb();
+      }
     }
   }
 
@@ -166,11 +174,18 @@ export async function syncDb(
     );
   });
 
-  // Atomic local write
-  for (const suffix of ["-wal", "-shm"]) {
-    try { unlinkSync(localDbPath + suffix); } catch {}
+  // Close any open local handle before swapping the file so an in-process
+  // reader (daemon / long-lived MCP server) can't see a half-swapped DB.
+  closeDb();
+  try {
+    // Atomic local write
+    for (const suffix of ["-wal", "-shm"]) {
+      try { unlinkSync(localDbPath + suffix); } catch {}
+    }
+    renameSync(tmpLocal, localDbPath);
+  } finally {
+    reloadDb();
   }
-  renameSync(tmpLocal, localDbPath);
 
   // Clean up remote temp
   await sshRawExec(remote, `rm -f ${shellEscape(tmpRemote)}`);
