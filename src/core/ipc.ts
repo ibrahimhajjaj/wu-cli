@@ -1,5 +1,5 @@
 import { createServer, connect, type Socket } from "net";
-import { existsSync, unlinkSync } from "fs";
+import { existsSync, unlinkSync, chmodSync } from "fs";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { DAEMON_SOCK_PATH } from "../config/paths.js";
@@ -57,6 +57,7 @@ export function startDaemonIpc(
   });
 
   server.listen(sockPath, () => {
+    try { chmodSync(sockPath, 0o600); } catch { /* best effort */ }
     logger.debug({ path: sockPath }, "IPC server listening");
   });
 

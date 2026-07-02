@@ -1,4 +1,4 @@
-import { mkdirSync } from "fs";
+import { mkdirSync, chmodSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
 
@@ -12,7 +12,11 @@ export const DAEMON_SOCK_PATH = join(WU_HOME, "daemon.sock");
 export const DAEMON_STATE_PATH = join(WU_HOME, "daemon-state.json");
 
 export function ensureWuHome(): void {
-  mkdirSync(WU_HOME, { recursive: true });
-  mkdirSync(AUTH_DIR, { recursive: true });
-  mkdirSync(MEDIA_DIR, { recursive: true });
+  mkdirSync(WU_HOME, { recursive: true, mode: 0o700 });
+  mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
+  mkdirSync(MEDIA_DIR, { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(WU_HOME, 0o700);
+    chmodSync(AUTH_DIR, 0o700);
+  } catch { /* best effort - dir may be on a filesystem without POSIX modes */ }
 }
