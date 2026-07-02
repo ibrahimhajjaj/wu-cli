@@ -1003,44 +1003,30 @@ export function registerTools(
       timeout_ms: z.number().optional().default(30000).describe("Timeout in ms"),
     },
     async (params) => {
-      const sock = getSock();
-      if (sock) {
-        try {
-          const result = await backfillHistory(sock, params.jid, params.count, config, {
+      try {
+        const result = await dispatch({
+          local: (sock) => backfillHistory(sock, params.jid, params.count, config, {
             timeoutMs: params.timeout_ms,
-          });
-          return jsonResult(result);
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
-      }
-
-      if (remote) {
-        try {
-          const sshResult = await sshWuExec(remote.remote, [
+          }),
+          remoteArgs: [
             "history", "backfill", params.jid,
             "--count", String(params.count),
             "--timeout", String(params.timeout_ms),
             "--json",
-          ]);
-          if (sshResult.exitCode !== 0) {
-            return errorResult(`Remote backfill failed: ${sshResult.stderr}`);
-          }
-          const result = JSON.parse(sshResult.stdout);
-
-          // Sync DB to pull new messages locally
-          try {
-            await syncDb(remote.remote, DB_PATH);
-            reloadDb();
-          } catch { /* best effort */ }
-
-          return jsonResult(result);
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
+          ],
+          remoteErrorPrefix: "Remote backfill failed",
+          afterRemote: async () => {
+            // Sync DB to pull new messages locally
+            try {
+              await syncDb(remote!.remote, DB_PATH);
+              reloadDb();
+            } catch { /* best effort */ }
+          },
+        });
+        return jsonResult(result);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
