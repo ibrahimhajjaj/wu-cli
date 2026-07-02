@@ -57,12 +57,54 @@ export function resolveExportPath(output: string, baseDir: string): string {
   return requested;
 }
 
+// Local socket → (optional) daemon IPC → remote SSH → error. One place to
+// express the transport fallback every write/media tool otherwise repeats.
+interface DispatchSpec<T> {
+  // Run against the in-process live socket. Return the tool result on success.
+  local?: (sock: WASocket) => Promise<T>;
+  // Optional daemon-IPC rung (media tools). Return the tool result.
+  ipc?: () => Promise<T>;
+  // Args to `wu ... --json` run on the remote; parsed stdout is passed on.
+  remoteArgs?: string[];
+  remoteTimeoutMs?: number;
+  // Prefixes the thrown message on a non-zero remote exit, matching each
+  // tool's existing "Remote X failed: ..." wording.
+  remoteErrorPrefix?: string;
+  // Optional post-remote hook (e.g. inject the sent message locally, or pull
+  // media bytes back with syncMedia). May be async; dispatch awaits it.
+  afterRemote?: (parsed: any) => void | Promise<void>;
+  // Overrides the default "no transport available" message.
+  notConnectedMessage?: string;
+}
+
 export function registerTools(
   server: McpServer,
   getSock: () => WASocket | undefined,
   config: WuConfig,
   remote?: { name: string; remote: RemoteConfig },
 ): void {
+  async function dispatch<T>(spec: DispatchSpec<T>): Promise<T> {
+    const sock = getSock();
+    if (sock && spec.local) return spec.local(sock);
+    if (spec.ipc && (await daemonIpcAvailable())) return spec.ipc();
+    if (remote && spec.remoteArgs) {
+      const res = await sshWuExec(
+        remote.remote,
+        spec.remoteArgs,
+        spec.remoteTimeoutMs ? { timeoutMs: spec.remoteTimeoutMs } : undefined
+      );
+      if (res.exitCode !== 0) {
+        throw new Error(
+          spec.remoteErrorPrefix ? `${spec.remoteErrorPrefix}: ${res.stderr}` : (res.stderr || "remote command failed")
+        );
+      }
+      const parsed = res.stdout ? JSON.parse(res.stdout) : null;
+      await spec.afterRemote?.(parsed);
+      return parsed as T;
+    }
+    throw new Error(spec.notConnectedMessage || "Not connected to WhatsApp and no remote configured");
+  }
+
   // Download specific media ids by whatever path is available (local socket,
   // a running daemon's socket, or the remote VPS), pulling bytes back locally.
   async function downloadMediaForManifest(
