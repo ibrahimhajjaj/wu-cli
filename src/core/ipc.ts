@@ -121,7 +121,8 @@ async function dispatch(
       if (!ids || ids.length === 0) {
         const chat = params.chat ? String(params.chat) : undefined;
         if (!chat) throw new Error("Provide msgIds or chat");
-        const limit = Number(params.limit ?? 50);
+        const limitRaw = Number(params.limit ?? 50);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.floor(limitRaw) : 50;
         const rows = getDb()
           .prepare(
             "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
@@ -131,7 +132,8 @@ async function dispatch(
       }
       if (ids.length === 0) return { results: [], errors: [] };
       const outDir = params.outDir ? String(params.outDir) : undefined;
-      const concurrency = Number(params.concurrency ?? 4);
+      const concurrencyRaw = Number(params.concurrency ?? 4);
+      const concurrency = Number.isFinite(concurrencyRaw) && concurrencyRaw > 0 ? Math.floor(concurrencyRaw) : 4;
       return downloadMediaBatch(ids, sock, config, outDir, { concurrency });
     }
     default:
