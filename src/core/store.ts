@@ -158,22 +158,24 @@ export function withFtsRecovery<T>(fn: () => T): T {
 
 // --- Single-row upserts ---
 
+const MESSAGE_UPSERT_SQL = `
+  INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
+  VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
+  ON CONFLICT(id) DO UPDATE SET
+    body = COALESCE(excluded.body, messages.body),
+    sender_name = COALESCE(excluded.sender_name, messages.sender_name),
+    media_path = COALESCE(excluded.media_path, messages.media_path),
+    media_direct_path = COALESCE(excluded.media_direct_path, messages.media_direct_path),
+    media_key = COALESCE(excluded.media_key, messages.media_key),
+    media_file_sha256 = COALESCE(excluded.media_file_sha256, messages.media_file_sha256),
+    media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
+    media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
+    raw = COALESCE(excluded.raw, messages.raw)
+`;
+
 export function upsertMessage(row: Omit<MessageRow, "created_at">): void {
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
-    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
-    ON CONFLICT(id) DO UPDATE SET
-      body = COALESCE(excluded.body, messages.body),
-      sender_name = COALESCE(excluded.sender_name, messages.sender_name),
-      media_path = COALESCE(excluded.media_path, messages.media_path),
-      media_direct_path = COALESCE(excluded.media_direct_path, messages.media_direct_path),
-      media_key = COALESCE(excluded.media_key, messages.media_key),
-      media_file_sha256 = COALESCE(excluded.media_file_sha256, messages.media_file_sha256),
-      media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
-      media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
-      raw = COALESCE(excluded.raw, messages.raw)
-  `);
+  const stmt = db.prepare(MESSAGE_UPSERT_SQL);
   withFtsRecovery(() => stmt.run(row));
 }
 
@@ -187,6 +189,21 @@ export type ChatUpsert = Omit<
   linked_parent?: string | null;
 };
 
+const CHAT_UPSERT_SQL = `
+  INSERT INTO chats (jid, name, type, participant_count, description, last_message_at, last_seen_at, is_community, is_community_announce, linked_parent)
+  VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at, @last_seen_at, @is_community, @is_community_announce, @linked_parent)
+  ON CONFLICT(jid) DO UPDATE SET
+    name = COALESCE(excluded.name, chats.name),
+    participant_count = COALESCE(excluded.participant_count, chats.participant_count),
+    description = COALESCE(excluded.description, chats.description),
+    last_message_at = MAX(COALESCE(excluded.last_message_at, 0), COALESCE(chats.last_message_at, 0)),
+    last_seen_at = MAX(COALESCE(excluded.last_seen_at, 0), COALESCE(chats.last_seen_at, 0)),
+    is_community = COALESCE(excluded.is_community, chats.is_community),
+    is_community_announce = COALESCE(excluded.is_community_announce, chats.is_community_announce),
+    linked_parent = COALESCE(excluded.linked_parent, chats.linked_parent),
+    updated_at = unixepoch()
+`;
+
 export function upsertChat(row: ChatUpsert): void {
   const db = getDb();
   const params = {
@@ -196,34 +213,23 @@ export function upsertChat(row: ChatUpsert): void {
     linked_parent: null,
     ...row,
   };
-  db.prepare(`
-    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at, last_seen_at, is_community, is_community_announce, linked_parent)
-    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at, @last_seen_at, @is_community, @is_community_announce, @linked_parent)
-    ON CONFLICT(jid) DO UPDATE SET
-      name = COALESCE(excluded.name, chats.name),
-      participant_count = COALESCE(excluded.participant_count, chats.participant_count),
-      description = COALESCE(excluded.description, chats.description),
-      last_message_at = MAX(COALESCE(excluded.last_message_at, 0), COALESCE(chats.last_message_at, 0)),
-      last_seen_at = MAX(COALESCE(excluded.last_seen_at, 0), COALESCE(chats.last_seen_at, 0)),
-      is_community = COALESCE(excluded.is_community, chats.is_community),
-      is_community_announce = COALESCE(excluded.is_community_announce, chats.is_community_announce),
-      linked_parent = COALESCE(excluded.linked_parent, chats.linked_parent),
-      updated_at = unixepoch()
-  `).run(params);
+  db.prepare(CHAT_UPSERT_SQL).run(params);
 }
+
+const CONTACT_UPSERT_SQL = `
+  INSERT INTO contacts (jid, phone, push_name, saved_name, is_business)
+  VALUES (@jid, @phone, @push_name, @saved_name, @is_business)
+  ON CONFLICT(jid) DO UPDATE SET
+    phone = COALESCE(excluded.phone, contacts.phone),
+    push_name = COALESCE(excluded.push_name, contacts.push_name),
+    saved_name = COALESCE(excluded.saved_name, contacts.saved_name),
+    is_business = COALESCE(excluded.is_business, contacts.is_business),
+    updated_at = unixepoch()
+`;
 
 export function upsertContact(row: Omit<ContactRow, "updated_at">): void {
   const db = getDb();
-  db.prepare(`
-    INSERT INTO contacts (jid, phone, push_name, saved_name, is_business)
-    VALUES (@jid, @phone, @push_name, @saved_name, @is_business)
-    ON CONFLICT(jid) DO UPDATE SET
-      phone = COALESCE(excluded.phone, contacts.phone),
-      push_name = COALESCE(excluded.push_name, contacts.push_name),
-      saved_name = COALESCE(excluded.saved_name, contacts.saved_name),
-      is_business = COALESCE(excluded.is_business, contacts.is_business),
-      updated_at = unixepoch()
-  `).run(row);
+  db.prepare(CONTACT_UPSERT_SQL).run(row);
 }
 
 export function upsertGroupParticipants(
@@ -249,20 +255,7 @@ export function upsertGroupParticipants(
 export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO messages (id, chat_jid, sender_jid, sender_name, body, type, media_mime, media_path, media_size, media_direct_path, media_key, media_file_sha256, media_file_enc_sha256, media_file_length, quoted_id, location_lat, location_lon, location_name, is_from_me, timestamp, raw)
-    VALUES (@id, @chat_jid, @sender_jid, @sender_name, @body, @type, @media_mime, @media_path, @media_size, @media_direct_path, @media_key, @media_file_sha256, @media_file_enc_sha256, @media_file_length, @quoted_id, @location_lat, @location_lon, @location_name, @is_from_me, @timestamp, @raw)
-    ON CONFLICT(id) DO UPDATE SET
-      body = COALESCE(excluded.body, messages.body),
-      sender_name = COALESCE(excluded.sender_name, messages.sender_name),
-      media_path = COALESCE(excluded.media_path, messages.media_path),
-      media_direct_path = COALESCE(excluded.media_direct_path, messages.media_direct_path),
-      media_key = COALESCE(excluded.media_key, messages.media_key),
-      media_file_sha256 = COALESCE(excluded.media_file_sha256, messages.media_file_sha256),
-      media_file_enc_sha256 = COALESCE(excluded.media_file_enc_sha256, messages.media_file_enc_sha256),
-      media_file_length = COALESCE(excluded.media_file_length, messages.media_file_length),
-      raw = COALESCE(excluded.raw, messages.raw)
-  `);
+  const stmt = db.prepare(MESSAGE_UPSERT_SQL);
   const tx = db.transaction(() => {
     for (const row of rows) {
       stmt.run(row);
@@ -274,20 +267,7 @@ export function bulkUpsertMessages(rows: Omit<MessageRow, "created_at">[]): void
 export function bulkUpsertChats(rows: ChatUpsert[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO chats (jid, name, type, participant_count, description, last_message_at, last_seen_at, is_community, is_community_announce, linked_parent)
-    VALUES (@jid, @name, @type, @participant_count, @description, @last_message_at, @last_seen_at, @is_community, @is_community_announce, @linked_parent)
-    ON CONFLICT(jid) DO UPDATE SET
-      name = COALESCE(excluded.name, chats.name),
-      participant_count = COALESCE(excluded.participant_count, chats.participant_count),
-      description = COALESCE(excluded.description, chats.description),
-      last_message_at = MAX(COALESCE(excluded.last_message_at, 0), COALESCE(chats.last_message_at, 0)),
-      last_seen_at = MAX(COALESCE(excluded.last_seen_at, 0), COALESCE(chats.last_seen_at, 0)),
-      is_community = COALESCE(excluded.is_community, chats.is_community),
-      is_community_announce = COALESCE(excluded.is_community_announce, chats.is_community_announce),
-      linked_parent = COALESCE(excluded.linked_parent, chats.linked_parent),
-      updated_at = unixepoch()
-  `);
+  const stmt = db.prepare(CHAT_UPSERT_SQL);
   db.transaction(() => {
     for (const row of rows) {
       stmt.run({
@@ -304,16 +284,7 @@ export function bulkUpsertChats(rows: ChatUpsert[]): void {
 export function bulkUpsertContacts(rows: Omit<ContactRow, "updated_at">[]): void {
   if (rows.length === 0) return;
   const db = getDb();
-  const stmt = db.prepare(`
-    INSERT INTO contacts (jid, phone, push_name, saved_name, is_business)
-    VALUES (@jid, @phone, @push_name, @saved_name, @is_business)
-    ON CONFLICT(jid) DO UPDATE SET
-      phone = COALESCE(excluded.phone, contacts.phone),
-      push_name = COALESCE(excluded.push_name, contacts.push_name),
-      saved_name = COALESCE(excluded.saved_name, contacts.saved_name),
-      is_business = COALESCE(excluded.is_business, contacts.is_business),
-      updated_at = unixepoch()
-  `);
+  const stmt = db.prepare(CONTACT_UPSERT_SQL);
   db.transaction(() => {
     for (const row of rows) {
       stmt.run(row);
