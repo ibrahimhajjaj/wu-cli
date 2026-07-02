@@ -202,5 +202,9 @@ export function daemonRequest<T = unknown>(
       }
     });
     conn.once("error", (err) => { clearTimeout(timer); finish(err); });
+    conn.once("close", () => {
+      clearTimeout(timer);
+      finish(new Error("Daemon closed the connection before responding"));
+    });
   });
 }
