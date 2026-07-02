@@ -21,6 +21,7 @@ import {
   getMessageCount, getMessageContext, upsertMessage,
   getFilteredMessageCount, getMessage, getMessagesByIds,
 } from "../core/store.js";
+import { listChatsForConfig, searchChatsForConfig } from "../core/service.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
@@ -442,8 +443,7 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      const allChats = listChats({ limit: 10000 });
-      const chats = allChats.filter((c) => shouldCollect(c.jid, cfg)).slice(0, params.limit);
+      const chats = listChatsForConfig(cfg, { limit: params.limit });
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,
@@ -601,8 +601,7 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      const allChats = searchChats(params.query, { limit: 10000 });
-      const chats = allChats.filter((c) => shouldCollect(c.jid, cfg)).slice(0, params.limit);
+      const chats = searchChatsForConfig(cfg, params.query, { limit: params.limit });
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,

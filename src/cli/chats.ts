@@ -1,7 +1,6 @@
 import { Command } from "commander";
-import { listChats, searchChats } from "../core/store.js";
+import { listChatsForConfig, searchChatsForConfig } from "../core/service.js";
 import { loadConfig } from "../config/schema.js";
-import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
 
 export function registerChatsCommand(program: Command): void {
@@ -15,8 +14,7 @@ export function registerChatsCommand(program: Command): void {
     .action((opts: { limit: string; json?: boolean }) => {
       const config = loadConfig();
       const limit = parseInt(opts.limit, 10);
-      const allRows = listChats({ limit: 10000 });
-      const rows = allRows.filter((r) => shouldCollect(r.jid, config)).slice(0, limit);
+      const rows = listChatsForConfig(config, { limit });
 
       if (rows.length === 0) {
         console.log("No chats found. Run `wu daemon` or `wu listen` to collect data.");
@@ -44,8 +42,7 @@ export function registerChatsCommand(program: Command): void {
     .action((query: string, opts: { limit: string; json?: boolean }) => {
       const config = loadConfig();
       const limit = parseInt(opts.limit, 10);
-      const allRows = searchChats(query, { limit: 10000 });
-      const rows = allRows.filter((r) => shouldCollect(r.jid, config)).slice(0, limit);
+      const rows = searchChatsForConfig(config, query, { limit });
 
       if (rows.length === 0) {
         console.log("No chats found matching query.");
