@@ -1,7 +1,7 @@
 import { Command } from "commander";
-import { listDms, searchChats } from "../core/store.js";
+import { listDmsForConfig, searchDmsForConfig } from "../core/service.js";
 import { loadConfig } from "../config/schema.js";
-import { resolveConstraint, shouldCollect } from "../core/constraints.js";
+import { resolveConstraint } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
 
 export function registerDmsCommand(program: Command): void {
@@ -18,14 +18,13 @@ export function registerDmsCommand(program: Command): void {
     .action((opts: { limit: string; all?: boolean; json?: boolean }) => {
       const config = loadConfig();
       const limit = parseInt(opts.limit, 10);
-      const allRows = listDms({ limit: 10000 });
-      const rows = opts.all
-        ? allRows
-        : allRows.filter((r) => shouldCollect(r.jid, config));
-      const visible = rows.slice(0, limit);
+      const visible = listDmsForConfig(config, { limit, includeBlocked: opts.all });
 
       if (visible.length === 0) {
-        if (allRows.length === 0) {
+        // Distinguish "nothing cached" from "cached but filtered out" without
+        // fetching the full table - a bounded existence probe is enough.
+        const anyDms = listDmsForConfig(config, { limit: 1, includeBlocked: true });
+        if (anyDms.length === 0) {
           console.log("No 1:1 chats cached yet. Run `wu daemon` to start collecting.");
         } else {
           console.log(
@@ -65,9 +64,7 @@ export function registerDmsCommand(program: Command): void {
     .action((query: string, opts: { limit: string; json?: boolean }) => {
       const config = loadConfig();
       const limit = parseInt(opts.limit, 10);
-      const rows = searchChats(query, { limit: 10000 })
-        .filter((r) => r.type === "dm" && shouldCollect(r.jid, config))
-        .slice(0, limit);
+      const rows = searchDmsForConfig(config, query, { limit });
 
       if (rows.length === 0) {
         console.log("No 1:1 chats found matching query.");

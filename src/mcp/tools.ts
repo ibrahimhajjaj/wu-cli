@@ -21,7 +21,7 @@ import {
   getMessageCount, getMessageContext, upsertMessage,
   getFilteredMessageCount, getMessage, getMessagesByIds,
 } from "../core/store.js";
-import { listChatsForConfig, searchChatsForConfig } from "../core/service.js";
+import { listChatsForConfig, searchChatsForConfig, listDmsForConfig } from "../core/service.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
@@ -739,10 +739,10 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      const allChats = listChats({ limit: 10000 });
-      let dms = allChats.filter((c) => c.type === "dm");
-      if (!params.include_blocked) dms = dms.filter((c) => shouldCollect(c.jid, cfg));
-      dms = dms.slice(0, params.limit);
+      const dms = listDmsForConfig(cfg, {
+        limit: params.limit,
+        includeBlocked: params.include_blocked,
+      });
       return jsonResult(
         dms.map((c) => ({
           jid: c.jid,

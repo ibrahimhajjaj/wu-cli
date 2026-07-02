@@ -73,6 +73,23 @@ export function listDmsForConfig(
   return listDmsWhere(predicate, { limit: opts.limit });
 }
 
+// `wu dms search` - like searchChatsForConfig but restricted to type='dm'.
+// The type restriction has to be pushed into the same predicate (not
+// filtered in JS afterwards) or the SQL-side LIMIT could cut off matching
+// DMs before the type filter ever sees them.
+export function searchDmsForConfig(
+  config: WuConfig,
+  query: string,
+  opts: { limit: number }
+): ChatRow[] {
+  const constraint = constraintSqlPredicate("jid", config);
+  const predicate = {
+    sql: `type = 'dm' AND (${constraint.sql})`,
+    params: constraint.params,
+  };
+  return searchChatsWhere(query, predicate, { limit: opts.limit });
+}
+
 export function listGroupsForConfig(
   config: WuConfig,
   opts: { limit: number; allowedOnly?: boolean; order?: "recency" | "name" }
