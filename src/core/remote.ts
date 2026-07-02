@@ -1,6 +1,8 @@
 import { execFile, execFileSync } from "child_process";
-import { existsSync, renameSync, unlinkSync, statSync } from "fs";
+import { existsSync, renameSync, unlinkSync, statSync, mkdirSync } from "fs";
+import { join } from "path";
 import type { WuConfig, RemoteConfig } from "../config/schema.js";
+import { WU_HOME } from "../config/paths.js";
 
 // --- Shell escaping (POSIX-safe) ---
 
@@ -10,20 +12,20 @@ export function shellEscape(arg: string): string {
 
 // Expand ~ to $HOME for remote shell (single-quoted ~ won't expand)
 export function remotePath(path: string): string {
+  if (path === "~") return '"$HOME"';
   if (path.startsWith("~/")) {
-    return `"$HOME/${path.slice(2)}"`;
-  }
-  if (path === "~") {
-    return '"$HOME"';
+    return `"$HOME"/${shellEscape(path.slice(2))}`;
   }
   return shellEscape(path);
 }
 
 // --- SSH connection multiplexing ---
 
-const CONTROL_PATH = "/tmp/wu-ssh-%r@%h:%p";
+const CONTROL_DIR = join(WU_HOME, "ssh");
+const CONTROL_PATH = join(CONTROL_DIR, "cm-%r@%h:%p");
 
 function sshControlArgs(): string[] {
+  try { mkdirSync(CONTROL_DIR, { recursive: true, mode: 0o700 }); } catch { /* best effort */ }
   return [
     "-o", "ControlMaster=auto",
     "-o", `ControlPath=${CONTROL_PATH}`,
@@ -73,7 +75,7 @@ export async function sshRawExec(
   command: string,
   opts?: SshExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-  const args = [...sshControlArgs(), remote.host, command];
+  const args = [...sshControlArgs(), "--", remote.host, command];
   return spawnSsh(args, 1, opts?.timeoutMs ?? DEFAULT_SSH_TIMEOUT);
 }
 

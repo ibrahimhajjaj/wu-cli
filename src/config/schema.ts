@@ -45,7 +45,12 @@ const LogConfig = z.object({
 });
 
 const RemoteConfig = z.object({
-  host: z.string(),
+  host: z
+    .string()
+    .regex(
+      /^[A-Za-z0-9](?:[A-Za-z0-9._@:-]*[A-Za-z0-9.])?$/,
+      "remote.host must be a hostname or user@host and cannot start with '-'"
+    ),
   wu_home: z.string().default("~/.wu"),
 });
 export type RemoteConfig = z.infer<typeof RemoteConfig>;
