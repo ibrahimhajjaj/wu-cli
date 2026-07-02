@@ -3,9 +3,13 @@ import { withConnection } from "../core/connection.js";
 import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
 import { listMessagesForConfig, searchMessagesForConfig } from "../core/service.js";
 import { importMessagesJsonl } from "../core/import.js";
+import { exportMessages } from "../core/export.js";
+import { shouldCollect } from "../core/constraints.js";
 import { loadConfig } from "../config/schema.js";
 import { outputResult, formatTimestamp } from "./format.js";
 import { EXIT_NOT_FOUND, EXIT_GENERAL_ERROR } from "./exit-codes.js";
+
+const EXPORT_FORMATS = ["jsonl", "json", "markdown", "csv"] as const;
 
 export function registerMessagesCommand(program: Command): void {
   const messages = program
@@ -208,6 +212,74 @@ export function registerMessagesCommand(program: Command): void {
         process.exit(error.exitCode || EXIT_GENERAL_ERROR);
       }
     });
+
+  messages
+    .command("export <jid>")
+    .description("Export messages from a chat to a file")
+    .option("--format <format>", "Output format: jsonl, json, markdown, or csv", "jsonl")
+    .option("--after <ts>", "After timestamp (unix)")
+    .option("--before <ts>", "Before timestamp (unix)")
+    .option("-o, --output <path>", "File path to write to")
+    .option("--exclude-reactions", "Skip reaction messages")
+    .option("--types <list>", "Only export these message types, comma-separated (e.g. text,image)")
+    .option("--exclude-types <list>", "Skip these message types, comma-separated (e.g. sticker,reaction)")
+    .option("--json", "Output the export summary as JSON")
+    .action(
+      (
+        jid: string,
+        opts: {
+          format: string;
+          after?: string;
+          before?: string;
+          output?: string;
+          excludeReactions?: boolean;
+          types?: string;
+          excludeTypes?: string;
+          json?: boolean;
+        }
+      ) => {
+        const config = loadConfig();
+        if (!shouldCollect(jid, config)) {
+          console.error(`Chat ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+
+        if (!EXPORT_FORMATS.includes(opts.format as (typeof EXPORT_FORMATS)[number])) {
+          console.error(`Invalid --format "${opts.format}"; expected one of: ${EXPORT_FORMATS.join(", ")}`);
+          process.exit(EXIT_GENERAL_ERROR);
+        }
+        const format = opts.format as (typeof EXPORT_FORMATS)[number];
+
+        const output = opts.output || `${jid.replace(/[^a-zA-Z0-9]/g, "_")}.${format === "markdown" ? "md" : format}`;
+
+        try {
+          const result = exportMessages({
+            chatJid: jid,
+            after: opts.after ? parseInt(opts.after, 10) : undefined,
+            before: opts.before ? parseInt(opts.before, 10) : undefined,
+            format,
+            output,
+            excludeReactions: opts.excludeReactions,
+            types: opts.types ? opts.types.split(",").map((s) => s.trim()).filter(Boolean) : undefined,
+            excludeTypes: opts.excludeTypes
+              ? opts.excludeTypes.split(",").map((s) => s.trim()).filter(Boolean)
+              : undefined,
+          });
+
+          if (opts.json) {
+            outputResult(result, { json: true });
+          } else {
+            console.log(`Exported: ${result.messages_exported}`);
+            console.log(`File: ${result.file}`);
+            console.log(`Size: ${result.file_size}`);
+          }
+        } catch (err) {
+          const error = err as Error & { exitCode?: number };
+          console.error(error.message);
+          process.exit(error.exitCode || EXIT_GENERAL_ERROR);
+        }
+      }
+    );
 
   messages
     .command("import <file>")

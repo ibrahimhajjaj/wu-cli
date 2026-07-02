@@ -156,6 +156,16 @@ describe("CLI command tree - messages", () => {
     assert.equal(argRequired(react, "msg-id"), true);
     assert.equal(argRequired(react, "emoji"), true);
   });
+
+  it("export takes a required <jid>, defaults --format to jsonl, and offers the rest of the mcp export options", () => {
+    const exp = child(sub("messages"), "export");
+    assert.equal(argRequired(exp, "jid"), true);
+    assert.equal(optionDefault(exp, "--format"), "jsonl");
+    for (const flag of ["--after", "--before", "--output", "--exclude-reactions", "--types", "--exclude-types", "--json"]) {
+      assert.ok(exp.options.some((o) => o.long === flag), `expected messages export to have ${flag}`);
+    }
+    assert.ok(exp.options.some((o) => o.short === "-o"), "expected messages export to have -o as a short alias for --output");
+  });
 });
 
 describe("CLI command tree - media", () => {
