@@ -10,13 +10,12 @@ import {
   joinGroupByInvite,
 } from "../core/groups.js";
 import {
-  listChats,
-  listGroups,
   getGroupParticipants,
   upsertChat,
   upsertGroupParticipants,
   type ChatRow,
 } from "../core/store.js";
+import { listGroupsForConfig, getChat } from "../core/service.js";
 import { loadConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import type { WuConfig, ConstraintMode } from "../config/schema.js";
@@ -144,11 +143,10 @@ export function registerGroupsCommand(program: Command): void {
           }
         }
 
-        let groupChats = listGroups({ limit: 10000 });
-        if (opts.allowedOnly) {
-          groupChats = groupChats.filter((g) => resolveConstraint(g.jid, config) !== "none");
-        }
-        groupChats = groupChats.slice(0, limit);
+        const groupChats = listGroupsForConfig(config, {
+          limit,
+          allowedOnly: opts.allowedOnly,
+        });
 
         if (groupChats.length === 0) {
           console.log(
@@ -216,8 +214,7 @@ export function registerGroupsCommand(program: Command): void {
       }
 
       // Default: cached
-      const allChats = listChats({ limit: 10000 });
-      const chat = allChats.find((c) => c.jid === jid);
+      const chat = getChat(jid);
       if (!chat) {
         console.error(
           `Group not found in cache: ${jid}\nRun \`wu groups info ${jid} --live\` to fetch from WhatsApp.`

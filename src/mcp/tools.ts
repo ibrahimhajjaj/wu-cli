@@ -16,7 +16,6 @@ import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
 import {
-  listChats,
   listContacts, searchContacts, getGroupParticipants,
   getMessageCount, getMessageContext, upsertMessage,
   getFilteredMessageCount, getMessage, getMessagesByIds,
@@ -24,6 +23,7 @@ import {
 import {
   listChatsForConfig, searchChatsForConfig, listDmsForConfig,
   listMessagesForConfig, searchMessagesForConfig, listCommunitiesForConfig,
+  listGroupsForConfig, getChat,
 } from "../core/service.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
@@ -669,10 +669,11 @@ export function registerTools(
           return errorResult((err as Error).message);
         }
       }
-      const allChats = listChats({ limit: 10000 });
-      let chats = allChats.filter((c) => c.type === "group");
-      if (params.allowed_only) chats = chats.filter((c) => shouldCollect(c.jid, cfg));
-      chats = chats.slice(0, params.limit);
+      const chats = listGroupsForConfig(cfg, {
+        limit: params.limit,
+        allowedOnly: params.allowed_only,
+        order: "recency",
+      });
       return jsonResult(
         chats.map((c) => ({
           jid: c.jid,
@@ -772,8 +773,7 @@ export function registerTools(
         }
       }
       const participants = getGroupParticipants(params.jid);
-      const chats = listChats({ limit: 10000 });
-      const group = chats.find((c) => c.jid === params.jid);
+      const group = getChat(params.jid);
       return jsonResult({
         jid: params.jid,
         name: group?.name,
