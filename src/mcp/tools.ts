@@ -297,48 +297,29 @@ export function registerTools(
       out_dir: z.string().optional().describe("Output directory"),
     },
     async (params) => {
-      const sock = getSock();
-      if (sock) {
-        try {
-          const result = await downloadMedia(params.message_id, sock, config, params.out_dir);
-          return jsonResult(result);
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
-      }
+      try {
+        const args = ["media", "download", params.message_id];
+        if (params.out_dir) args.push("--out", params.out_dir);
+        args.push("--json");
 
-      // No local socket: route through a running daemon's socket if present.
-      if (await daemonIpcAvailable()) {
-        try {
-          const result = await daemonRequest("media.download", {
-            msgId: params.message_id,
-            outDir: params.out_dir,
-          });
-          return jsonResult(result);
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
+        const result = await dispatch({
+          local: (sock) => downloadMedia(params.message_id, sock, config, params.out_dir),
+          // No local socket: route through a running daemon's socket if present.
+          ipc: () => daemonRequest("media.download", { msgId: params.message_id, outDir: params.out_dir }),
+          // Remote mode: download on the VPS (its daemon serves it), then pull the
+          // bytes back so the file exists locally.
+          remoteArgs: args,
+          remoteTimeoutMs: MEDIA_SSH_TIMEOUT_MS,
+          remoteErrorPrefix: "Remote download failed",
+          afterRemote: async () => {
+            try { await syncMedia(remote!.remote, MEDIA_DIR); } catch { /* best effort */ }
+          },
+          notConnectedMessage: "Not connected to WhatsApp and no daemon or remote available",
+        });
+        return jsonResult(result);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      // Remote mode: download on the VPS (its daemon serves it), then pull the
-      // bytes back so the file exists locally.
-      if (remote) {
-        try {
-          const args = ["media", "download", params.message_id];
-          if (params.out_dir) args.push("--out", params.out_dir);
-          args.push("--json");
-          const sshResult = await sshWuExec(remote.remote, args, { timeoutMs: MEDIA_SSH_TIMEOUT_MS });
-          if (sshResult.exitCode !== 0) {
-            return errorResult(`Remote download failed: ${sshResult.stderr}`);
-          }
-          try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
-          return jsonResult(JSON.parse(sshResult.stdout));
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
-      }
-
-      return errorResult("Not connected to WhatsApp and no daemon or remote available");
     }
   );
 
