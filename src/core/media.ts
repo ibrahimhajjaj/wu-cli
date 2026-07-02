@@ -6,7 +6,7 @@ import {
   type MediaType,
 } from "@whiskeysockets/baileys";
 import { writeFileSync, mkdirSync, statSync, unlinkSync, existsSync, readdirSync } from "fs";
-import { join, extname, basename } from "path";
+import { join, extname, basename, resolve, sep } from "path";
 import type { WuConfig } from "../config/schema.js";
 import { getMessage, upsertMessage, deserializeWAMessage, type MessageRow } from "./store.js";
 import { enrichFile, type Capability } from "./enrich.js";
@@ -16,6 +16,25 @@ import { asyncPool } from "./pool.js";
 import { getDb } from "../db/database.js";
 
 const logger = createChildLogger("media");
+
+// msg.key.id is remote-controlled (it comes straight off the wire) and is used
+// verbatim to name the downloaded file, so it has to be restricted to a safe
+// filename charset before it ever reaches a fs call.
+export function assertSafeMsgId(msgId: string): void {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(msgId)) {
+    throw new Error(`Unsafe message id for file write: ${JSON.stringify(msgId)}`);
+  }
+}
+
+// Belt-and-suspenders check that the final write target actually lands inside
+// the directory it was supposed to, regardless of how dir/msgId were derived.
+export function assertWithin(parentDir: string, childPath: string): void {
+  const parent = resolve(parentDir);
+  const child = resolve(childPath);
+  if (child !== parent && !child.startsWith(parent + sep)) {
+    throw new Error(`Refusing to write outside media directory: ${child}`);
+  }
+}
 
 const MIME_TO_EXT: Record<string, string> = {
   "image/jpeg": ".jpg",
@@ -116,8 +135,10 @@ export async function downloadMedia(
   const mime = row.media_mime || "application/octet-stream";
   const ext = MIME_TO_EXT[mime] || extname(row.media_path || "") || ".bin";
   const dir = outDir || config.whatsapp.media_dir || MEDIA_DIR;
+  assertSafeMsgId(msgId);
   mkdirSync(dir, { recursive: true });
   const filePath = join(dir, `${msgId}${ext}`);
+  assertWithin(dir, filePath);
   writeFileSync(filePath, buffer);
 
   // Update media_path in DB
