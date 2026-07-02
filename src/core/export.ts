@@ -268,137 +268,140 @@ export function exportMessages(opts: ExportOptions): ExportResult {
   const fd = openSync(opts.output, "w");
   const w = (s: string) => writeSync(fd, s);
 
-  if (total === 0) {
-    if (format === "json") w("[]");
-    if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
-    closeSync(fd);
-    return { messages_exported: 0, file: opts.output, oldest: null, newest: null, file_size: "0B" };
-  }
-
   // Write in batches using cursor-based pagination
   let exported = 0;
   let oldest: number | null = null;
   let newest: number | null = null;
-  let lastTimestamp = 0;
-  let lastRowid = 0;
-  let isFirst = true;
 
-  if (format === "json") w("[\n");
-  if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
-  if (format === "markdown") {
-    w(`# Messages Export\n\n`);
-  }
-
-  // Use rowid-based cursor pagination for efficiency
-  // First batch: no cursor
-  const firstBatchStmt = db.prepare(
-    `SELECT *, rowid FROM messages WHERE ${where} ORDER BY timestamp ASC, rowid ASC LIMIT ?`
-  );
-  // Subsequent batches: cursor from last row
-  const nextBatchStmt = db.prepare(
-    `SELECT *, rowid FROM messages WHERE ${where} AND (timestamp > ? OR (timestamp = ? AND rowid > ?)) ORDER BY timestamp ASC, rowid ASC LIMIT ?`
-  );
-
-  let currentDay = "";
-  const quotedStmt = db.prepare(
-    "SELECT sender_name, sender_jid, type, media_mime, raw, body FROM messages WHERE id = ?"
-  );
-  let batch: (MessageRow & { rowid: number })[];
-
-  // First batch
-  batch = firstBatchStmt.all(...params, batchSize) as (MessageRow & { rowid: number })[];
-
-  while (batch.length > 0) {
-    for (const row of batch) {
-      if (oldest === null || row.timestamp < oldest) oldest = row.timestamp;
-      if (newest === null || row.timestamp > newest) newest = row.timestamp;
-
-      switch (format) {
-        case "jsonl":
-          w(JSON.stringify({
-            id: row.id,
-            chat_jid: row.chat_jid,
-            sender_jid: row.sender_jid,
-            sender_name: row.sender_name,
-            body: row.body,
-            type: row.type,
-            timestamp: row.timestamp,
-            media_mime: row.media_mime,
-            media_path: row.media_path,
-            quoted_id: row.quoted_id,
-            is_from_me: row.is_from_me,
-          }) + "\n");
-          break;
-
-        case "json":
-          if (!isFirst) w(",\n");
-          w(JSON.stringify({
-            id: row.id,
-            chat_jid: row.chat_jid,
-            sender_jid: row.sender_jid,
-            sender_name: row.sender_name,
-            body: row.body,
-            type: row.type,
-            timestamp: row.timestamp,
-            media_mime: row.media_mime,
-            media_path: row.media_path,
-            quoted_id: row.quoted_id,
-            is_from_me: row.is_from_me,
-          }, null, 2));
-          break;
-
-        case "markdown": {
-          const date = new Date(row.timestamp * 1000);
-          const dayStr = date.toISOString().split("T")[0];
-          if (dayStr !== currentDay) {
-            currentDay = dayStr;
-            w(`\n## ${dayStr}\n\n`);
-          }
-          const time = date.toTimeString().slice(0, 5);
-          const sender = row.sender_name || row.sender_jid || (row.is_from_me ? "Me" : "Unknown");
-          // Replies reference what they answer; one indexed lookup per reply row.
-          let reply = "";
-          if (row.quoted_id) {
-            const q = quotedStmt.get(row.quoted_id) as
-              | Pick<MessageRow, "sender_name" | "sender_jid" | "type" | "media_mime" | "raw" | "body">
-              | undefined;
-            if (q) reply = `↩ to ${quotedSnippet(q)}\n`;
-          }
-          if (row.type === "text") {
-            w(`### ${time} — ${sender}\n${reply}${row.body || ""}\n\n`);
-          } else {
-            // Media/other: distinct label, with caption appended when present
-            const caption = row.body ? ` ${row.body}` : "";
-            w(`### ${time} — ${sender}\n${reply}${mediaLabel(row)}${caption}\n\n`);
-          }
-          break;
-        }
-
-        case "csv":
-          w([
-            escapeCSV(row.id),
-            escapeCSV(row.chat_jid),
-            escapeCSV(row.sender_jid),
-            escapeCSV(row.sender_name),
-            escapeCSV(row.body),
-            escapeCSV(row.type),
-            String(row.timestamp),
-          ].join(",") + "\n");
-          break;
-      }
-
-      isFirst = false;
-      lastTimestamp = row.timestamp;
-      lastRowid = row.rowid;
-      exported++;
+  try {
+    if (total === 0) {
+      if (format === "json") w("[]");
+      if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
+      return { messages_exported: 0, file: opts.output, oldest: null, newest: null, file_size: "0B" };
     }
 
-    // Next batch using cursor
-    batch = nextBatchStmt.all(...params, lastTimestamp, lastTimestamp, lastRowid, batchSize) as (MessageRow & { rowid: number })[];
-  }
+    let lastTimestamp = 0;
+    let lastRowid = 0;
+    let isFirst = true;
 
-  if (format === "json") w("\n]");
-  closeSync(fd);
+    if (format === "json") w("[\n");
+    if (format === "csv") w("id,chat_jid,sender_jid,sender_name,body,type,timestamp\n");
+    if (format === "markdown") {
+      w(`# Messages Export\n\n`);
+    }
+
+    // Use rowid-based cursor pagination for efficiency
+    // First batch: no cursor
+    const firstBatchStmt = db.prepare(
+      `SELECT *, rowid FROM messages WHERE ${where} ORDER BY timestamp ASC, rowid ASC LIMIT ?`
+    );
+    // Subsequent batches: cursor from last row
+    const nextBatchStmt = db.prepare(
+      `SELECT *, rowid FROM messages WHERE ${where} AND (timestamp > ? OR (timestamp = ? AND rowid > ?)) ORDER BY timestamp ASC, rowid ASC LIMIT ?`
+    );
+
+    let currentDay = "";
+    const quotedStmt = db.prepare(
+      "SELECT sender_name, sender_jid, type, media_mime, raw, body FROM messages WHERE id = ?"
+    );
+    let batch: (MessageRow & { rowid: number })[];
+
+    // First batch
+    batch = firstBatchStmt.all(...params, batchSize) as (MessageRow & { rowid: number })[];
+
+    while (batch.length > 0) {
+      for (const row of batch) {
+        if (oldest === null || row.timestamp < oldest) oldest = row.timestamp;
+        if (newest === null || row.timestamp > newest) newest = row.timestamp;
+
+        switch (format) {
+          case "jsonl":
+            w(JSON.stringify({
+              id: row.id,
+              chat_jid: row.chat_jid,
+              sender_jid: row.sender_jid,
+              sender_name: row.sender_name,
+              body: row.body,
+              type: row.type,
+              timestamp: row.timestamp,
+              media_mime: row.media_mime,
+              media_path: row.media_path,
+              quoted_id: row.quoted_id,
+              is_from_me: row.is_from_me,
+            }) + "\n");
+            break;
+
+          case "json":
+            if (!isFirst) w(",\n");
+            w(JSON.stringify({
+              id: row.id,
+              chat_jid: row.chat_jid,
+              sender_jid: row.sender_jid,
+              sender_name: row.sender_name,
+              body: row.body,
+              type: row.type,
+              timestamp: row.timestamp,
+              media_mime: row.media_mime,
+              media_path: row.media_path,
+              quoted_id: row.quoted_id,
+              is_from_me: row.is_from_me,
+            }, null, 2));
+            break;
+
+          case "markdown": {
+            const date = new Date(row.timestamp * 1000);
+            const dayStr = date.toISOString().split("T")[0];
+            if (dayStr !== currentDay) {
+              currentDay = dayStr;
+              w(`\n## ${dayStr}\n\n`);
+            }
+            const time = date.toTimeString().slice(0, 5);
+            const sender = row.sender_name || row.sender_jid || (row.is_from_me ? "Me" : "Unknown");
+            // Replies reference what they answer; one indexed lookup per reply row.
+            let reply = "";
+            if (row.quoted_id) {
+              const q = quotedStmt.get(row.quoted_id) as
+                | Pick<MessageRow, "sender_name" | "sender_jid" | "type" | "media_mime" | "raw" | "body">
+                | undefined;
+              if (q) reply = `↩ to ${quotedSnippet(q)}\n`;
+            }
+            if (row.type === "text") {
+              w(`### ${time} - ${sender}\n${reply}${row.body || ""}\n\n`);
+            } else {
+              // Media/other: distinct label, with caption appended when present
+              const caption = row.body ? ` ${row.body}` : "";
+              w(`### ${time} - ${sender}\n${reply}${mediaLabel(row)}${caption}\n\n`);
+            }
+            break;
+          }
+
+          case "csv":
+            w([
+              escapeCSV(row.id),
+              escapeCSV(row.chat_jid),
+              escapeCSV(row.sender_jid),
+              escapeCSV(row.sender_name),
+              escapeCSV(row.body),
+              escapeCSV(row.type),
+              String(row.timestamp),
+            ].join(",") + "\n");
+            break;
+        }
+
+        isFirst = false;
+        lastTimestamp = row.timestamp;
+        lastRowid = row.rowid;
+        exported++;
+      }
+
+      // Next batch using cursor
+      batch = nextBatchStmt.all(...params, lastTimestamp, lastTimestamp, lastRowid, batchSize) as (MessageRow & { rowid: number })[];
+    }
+
+    if (format === "json") w("\n]");
+  } finally {
+    closeSync(fd);
+  }
 
   // Get file size
   const stat = statSync(opts.output);
