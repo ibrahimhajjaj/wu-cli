@@ -71,14 +71,24 @@ async function runDaemon(): Promise<void> {
   //      case needs the silence timer, kept long so an overnight-quiet account
   //      is not churned (each needless reconnect re-runs history sync).
   const staleSeconds = config.whatsapp.watchdog_stale_seconds;
+  let warnedWsShape = false;
   const watchdogInterval = setInterval(() => {
     state.recordStoreHealth(getStoreHealth());
     state.flush(); // keep updated_at fresh so "process alive, stream dead" is visible
     if (!state.isOpen()) return;
 
     const sock = conn.getSock();
-    const wsOpen = (sock?.ws as { isOpen?: boolean } | undefined)?.isOpen ?? true;
-    if (!wsOpen) {
+    const rawWs = (sock as { ws?: { readyState?: number; isOpen?: boolean } } | undefined)?.ws;
+    let wsDropped = false;
+    if (rawWs && typeof rawWs.readyState === "number") {
+      wsDropped = rawWs.readyState !== 1; // WebSocket.OPEN
+    } else if (rawWs && typeof rawWs.isOpen === "boolean") {
+      wsDropped = !rawWs.isOpen;
+    } else if (!warnedWsShape) {
+      warnedWsShape = true;
+      log("⚠ watchdog: socket ws state not readable - relying on the stale-events timer");
+    }
+    if (wsDropped) {
       log("⚠ Socket dropped without a close event: restarting stream");
       state.markWatchdogRestart();
       conn.forceReconnect("watchdog: socket closed without notice");
