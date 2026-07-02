@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
 import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
 import { listMessages, searchMessages, type SearchResult } from "../core/store.js";
+import { importMessagesJsonl } from "../core/import.js";
 import { loadConfig } from "../config/schema.js";
 import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
@@ -203,6 +204,38 @@ export function registerMessagesCommand(program: Command): void {
           await deleteForEveryone(sock, jid, msgId, config);
           console.log(`Deleted: ${msgId}`);
         });
+      } catch (err) {
+        const error = err as Error & { exitCode?: number };
+        console.error(error.message);
+        process.exit(error.exitCode || EXIT_GENERAL_ERROR);
+      }
+    });
+
+  messages
+    .command("import <file>")
+    .description("Import messages from a jsonl export (see `wu messages export`)")
+    .option(
+      "--mode <mode>",
+      "Merge mode: merge (default - coalesce into existing rows without clobbering non-null fields) or skip (insert-only, never touch an existing row)",
+      "merge"
+    )
+    .option("--json", "Output as JSON")
+    .action((file: string, opts: { mode: string; json?: boolean }) => {
+      if (opts.mode !== "merge" && opts.mode !== "skip") {
+        console.error(`Invalid --mode "${opts.mode}"; expected "merge" or "skip"`);
+        process.exit(EXIT_GENERAL_ERROR);
+      }
+
+      try {
+        const result = importMessagesJsonl(file, { mode: opts.mode });
+
+        if (opts.json) {
+          outputResult(result, { json: true });
+        } else {
+          console.log(`Imported: ${result.imported}`);
+          console.log(`Skipped: ${result.skipped}`);
+          console.log(`Invalid: ${result.invalid}`);
+        }
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);
