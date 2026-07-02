@@ -231,13 +231,25 @@ export function registerGroupsCommand(program: Command): void {
   groups
     .command("create <name> [participants...]")
     .description("Create a new group")
-    .action(async (name: string, participants: string[]) => {
+    .option("--json", "Output as JSON")
+    .action(async (name: string, participants: string[], opts: { json?: boolean }) => {
       const config = loadConfig();
       try {
         await withConnection(async (sock) => {
           const result = await createGroup(sock, name, participants, config);
-          console.log(`Group created: ${result.id}`);
-          console.log(`Name: ${result.subject}`);
+          if (opts.json) {
+            outputResult(
+              {
+                id: result.id,
+                name: result.subject,
+                participant_count: result.participants?.length ?? participants.length,
+              },
+              { json: true }
+            );
+          } else {
+            console.log(`Group created: ${result.id}`);
+            console.log(`Name: ${result.subject}`);
+          }
         });
       } catch (err) {
         console.error((err as Error).message);

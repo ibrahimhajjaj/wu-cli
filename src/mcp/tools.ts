@@ -341,7 +341,11 @@ export function registerTools(
             params.participants,
             config
           );
-          return jsonResult({ id: result.id, name: result.subject });
+          return jsonResult({
+            id: result.id,
+            name: result.subject,
+            participant_count: result.participants?.length ?? params.participants.length,
+          });
         } catch (err) {
           return errorResult((err as Error).message);
         }
@@ -350,7 +354,7 @@ export function registerTools(
       if (remote) {
         try {
           const sshResult = await sshWuExec(remote.remote, [
-            "groups", "create", params.name, ...params.participants,
+            "groups", "create", params.name, ...params.participants, "--json",
           ]);
           if (sshResult.exitCode !== 0) {
             return errorResult(`Remote group create failed: ${sshResult.stderr}`);

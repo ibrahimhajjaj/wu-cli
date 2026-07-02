@@ -174,6 +174,15 @@ describe("CLI command tree - media", () => {
   });
 });
 
+describe("CLI command tree - groups", () => {
+  it("create takes a required <name>, an optional [participants...], and offers --json", () => {
+    const create = child(sub("groups"), "create");
+    assert.equal(argRequired(create, "name"), true);
+    assert.equal(argRequired(create, "participants"), false);
+    assert.ok(create.options.some((o) => o.long === "--json"));
+  });
+});
+
 describe("CLI command tree - db", () => {
   it("reset offers -y/--yes to skip confirmation", () => {
     const reset = child(sub("db"), "reset");
