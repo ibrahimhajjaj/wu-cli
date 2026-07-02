@@ -1042,69 +1042,56 @@ export function registerTools(
       delete_remote_after: z.boolean().optional().default(false).describe("In remote mode, delete the files on the VPS after pulling them back (saves disk on the box)"),
     },
     async (params) => {
-      const sock = getSock();
-      if (!sock) {
-        // Route through a local daemon's socket when one is running (it resolves
-        // the chat's undownloaded media itself when no ids are given).
-        if (await daemonIpcAvailable()) {
-          try {
-            const result = await daemonRequest("media.downloadBatch", {
-              msgIds: params.message_ids,
-              chat: params.chat,
-              limit: params.limit,
+      try {
+        const args = ["media", "download-batch"];
+        if (params.chat) args.push(params.chat);
+        if (params.limit) args.push("--limit", String(params.limit));
+        if (params.concurrency) args.push("--concurrency", String(params.concurrency));
+        args.push("--json");
+
+        const result = await dispatch({
+          local: async (sock) => {
+            let ids = params.message_ids;
+            if (!ids || ids.length === 0) {
+              if (!params.chat) throw new Error("Provide message_ids or chat");
+              const db = getDb();
+              const rows = db
+                .prepare(
+                  "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
+                )
+                .all(params.chat, params.limit) as Array<{ id: string }>;
+              ids = rows.map((r) => r.id);
+              if (ids.length === 0) return { results: [], errors: [], message: "No undownloaded media found" };
+            }
+
+            const { results, errors } = await downloadMediaBatch(ids, sock, config, undefined, {
               concurrency: params.concurrency,
             });
-            return jsonResult(result);
-          } catch (err) {
-            return errorResult((err as Error).message);
-          }
-        }
-
-        if (remote) {
-          try {
-            const args = ["media", "download-batch"];
-            if (params.chat) args.push(params.chat);
-            if (params.limit) args.push("--limit", String(params.limit));
-            if (params.concurrency) args.push("--concurrency", String(params.concurrency));
-            args.push("--json");
-
-            // Cold login + a batch can run long; give it room, and pull the
-            // downloaded files back to the local media dir afterwards.
-            const sshResult = await sshWuExec(remote.remote, args, { timeoutMs: MEDIA_SSH_TIMEOUT_MS });
-            if (sshResult.exitCode !== 0) {
-              return errorResult(`Remote batch download failed: ${sshResult.stderr}`);
-            }
-            try { await syncMedia(remote.remote, MEDIA_DIR); } catch { /* best effort */ }
+            return { results, errors };
+          },
+          // Route through a local daemon's socket when one is running (it resolves
+          // the chat's undownloaded media itself when no ids are given).
+          ipc: () => daemonRequest("media.downloadBatch", {
+            msgIds: params.message_ids,
+            chat: params.chat,
+            limit: params.limit,
+            concurrency: params.concurrency,
+          }),
+          // Cold login + a batch can run long; give it room, and pull the
+          // downloaded files back to the local media dir afterwards.
+          remoteArgs: args,
+          remoteTimeoutMs: MEDIA_SSH_TIMEOUT_MS,
+          remoteErrorPrefix: "Remote batch download failed",
+          afterRemote: async () => {
+            try { await syncMedia(remote!.remote, MEDIA_DIR); } catch { /* best effort */ }
             if (params.delete_remote_after && params.chat) {
               // Bytes are now local; reclaim the VPS copy.
-              try { await sshWuExec(remote.remote, ["media", "prune", "--chat", params.chat], { timeoutMs: MEDIA_SSH_TIMEOUT_MS }); } catch { /* best effort */ }
+              try { await sshWuExec(remote!.remote, ["media", "prune", "--chat", params.chat], { timeoutMs: MEDIA_SSH_TIMEOUT_MS }); } catch { /* best effort */ }
             }
-            return jsonResult(JSON.parse(sshResult.stdout));
-          } catch (err) {
-            return errorResult((err as Error).message);
-          }
-        }
-        return errorResult("Not connected to WhatsApp (media download requires connection)");
-      }
-
-      try {
-        let ids = params.message_ids;
-        if (!ids || ids.length === 0) {
-          if (!params.chat) return errorResult("Provide message_ids or chat");
-          const db = getDb();
-          const rows = db
-            .prepare(
-              "SELECT id FROM messages WHERE media_mime IS NOT NULL AND media_path IS NULL AND chat_jid = ? ORDER BY timestamp DESC LIMIT ?"
-            )
-            .all(params.chat, params.limit) as Array<{ id: string }>;
-          ids = rows.map((r) => r.id);
-          if (ids.length === 0) return jsonResult({ results: [], errors: [], message: "No undownloaded media found" });
-        }
-
-        const { results, errors } = await downloadMediaBatch(ids, sock, config, undefined, {
-          concurrency: params.concurrency,
+          },
+          notConnectedMessage: "Not connected to WhatsApp (media download requires connection)",
         });
-        return jsonResult({ results, errors });
+        return jsonResult(result);
       } catch (err) {
         return errorResult((err as Error).message);
       }
