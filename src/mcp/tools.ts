@@ -195,68 +195,58 @@ export function registerTools(
       reply_to: z.string().optional().describe("Message ID to reply to"),
     },
     async (params) => {
-      const sock = getSock();
-      if (sock) {
-        try {
-          let result;
-          if (params.media_path) {
-            result = await sendMedia(sock, params.to, params.media_path, config, {
-              caption: params.caption || params.message,
-              replyTo: params.reply_to,
+      try {
+        const args = ["messages", "send", params.to];
+        if (params.message) args.push(params.message);
+        if (params.media_path) args.push("--media", params.media_path);
+        if (params.caption) args.push("--caption", params.caption);
+        if (params.reply_to) args.push("--reply-to", params.reply_to);
+        args.push("--json");
+
+        const result = await dispatch<{ id: unknown; timestamp: unknown }>({
+          local: async (sock) => {
+            let sent;
+            if (params.media_path) {
+              sent = await sendMedia(sock, params.to, params.media_path, config, {
+                caption: params.caption || params.message,
+                replyTo: params.reply_to,
+              });
+            } else if (params.message) {
+              sent = await sendText(sock, params.to, params.message, config, {
+                replyTo: params.reply_to,
+              });
+            } else {
+              throw new Error("Provide message or media_path");
+            }
+            return { id: sent?.key?.id, timestamp: sent?.messageTimestamp };
+          },
+          remoteArgs: args,
+          remoteErrorPrefix: "Remote send failed",
+          afterRemote: (sent) => {
+            // Inject into local DB for write-read consistency
+            upsertMessage({
+              id: sent.id,
+              chat_jid: params.to,
+              sender_jid: null,
+              sender_name: null,
+              body: params.message || null,
+              type: "text",
+              media_mime: null, media_path: null, media_size: null,
+              media_direct_path: null, media_key: null, media_file_sha256: null,
+              media_file_enc_sha256: null, media_file_length: null,
+              quoted_id: params.reply_to || null,
+              location_lat: null, location_lon: null, location_name: null,
+              is_from_me: 1,
+              timestamp: sent.timestamp || Math.floor(Date.now() / 1000),
+              raw: null,
             });
-          } else if (params.message) {
-            result = await sendText(sock, params.to, params.message, config, {
-              replyTo: params.reply_to,
-            });
-          } else {
-            return errorResult("Provide message or media_path");
-          }
-          return jsonResult({ id: result?.key?.id, timestamp: result?.messageTimestamp });
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
+          },
+        });
+
+        return jsonResult(result);
+      } catch (err) {
+        return errorResult((err as Error).message);
       }
-
-      if (remote) {
-        try {
-          const args = ["messages", "send", params.to];
-          if (params.message) args.push(params.message);
-          if (params.media_path) args.push("--media", params.media_path);
-          if (params.caption) args.push("--caption", params.caption);
-          if (params.reply_to) args.push("--reply-to", params.reply_to);
-          args.push("--json");
-
-          const sshResult = await sshWuExec(remote.remote, args);
-          if (sshResult.exitCode !== 0) {
-            return errorResult(`Remote send failed: ${sshResult.stderr}`);
-          }
-          const sent = JSON.parse(sshResult.stdout);
-
-          // Inject into local DB for write-read consistency
-          upsertMessage({
-            id: sent.id,
-            chat_jid: params.to,
-            sender_jid: null,
-            sender_name: null,
-            body: params.message || null,
-            type: "text",
-            media_mime: null, media_path: null, media_size: null,
-            media_direct_path: null, media_key: null, media_file_sha256: null,
-            media_file_enc_sha256: null, media_file_length: null,
-            quoted_id: params.reply_to || null,
-            location_lat: null, location_lon: null, location_name: null,
-            is_from_me: 1,
-            timestamp: sent.timestamp || Math.floor(Date.now() / 1000),
-            raw: null,
-          });
-
-          return jsonResult(sent);
-        } catch (err) {
-          return errorResult((err as Error).message);
-        }
-      }
-
-      return errorResult("Not connected to WhatsApp and no remote configured");
     }
   );
 
