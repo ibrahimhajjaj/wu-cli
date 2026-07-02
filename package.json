@@ -34,7 +34,8 @@
     "dev": "tsx src/cli/index.ts",
     "test": "tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "prepublishOnly": "npm run build && npm test"
   },
   "engines": {
     "node": ">=20.0.0"
