@@ -397,6 +397,22 @@ When running `wu mcp`, the following are available to AI agents:
 | 4 | Connection failed |
 | 5 | Not found |
 
+## Notes
+
+### Baileys pin policy
+
+`@whiskeysockets/baileys` is pinned to an exact release candidate
+(`7.0.0-rc13`) in `package.json` - no `^` or `~`. `@whiskeysockets/baileys` is
+a reverse-engineered client for a protocol WhatsApp doesn't publish, so an
+`-rc` build can be yanked or shift behavior between builds; an exact pin keeps
+deploys deterministic instead of picking up a moving target on `npm install`.
+
+Upgrade cadence: periodically check upstream for a GA `7.0.0` (or newer)
+release and bump deliberately - never via `npm update`. Any bump must be
+tested against a real WhatsApp session before merging (the characterization
+tests in `tests/` can't simulate the live protocol) and followed by `npm
+audit` (the `ws` advisory that rides this dependency clears on bump).
+
 ## License
 
 MIT
