@@ -8,7 +8,7 @@ import { existsSync, unlinkSync } from "fs";
 import { resolve, sep, isAbsolute } from "path";
 import { DB_PATH, EXPORTS_DIR } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
-import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
+import { sendText, sendMedia, sendReaction } from "../core/sender.js";
 import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage, resolveLocalMediaPath } from "../core/media.js";
 import { enrichStatus, resolveBackend, type Capability } from "../core/enrich.js";
 import { asyncPool } from "../core/pool.js";
