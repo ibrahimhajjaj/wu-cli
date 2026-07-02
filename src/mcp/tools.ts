@@ -5,7 +5,8 @@ import type { WuConfig, RemoteConfig } from "../config/schema.js";
 import { loadConfig, saveConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import { existsSync, unlinkSync } from "fs";
-import { DB_PATH } from "../config/paths.js";
+import { resolve, sep, isAbsolute } from "path";
+import { DB_PATH, EXPORTS_DIR } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 import { sendText, sendMedia, sendReaction, deleteForEveryone } from "../core/sender.js";
 import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage, resolveLocalMediaPath } from "../core/media.js";
@@ -38,6 +39,18 @@ function errorResult(message: string) {
     content: [{ type: "text" as const, text: JSON.stringify({ error: message }) }],
     isError: true,
   };
+}
+
+// A relative output is taken relative to baseDir; an absolute output must
+// still resolve inside it. This blocks a message-borne instruction like
+// "export to ~/.bashrc" from reaching the filesystem outside the exports dir.
+export function resolveExportPath(output: string, baseDir: string): string {
+  const base = resolve(baseDir);
+  const requested = isAbsolute(output) ? resolve(output) : resolve(base, output);
+  if (requested !== base && !requested.startsWith(base + sep)) {
+    throw new Error(`export output must stay within ${base}`);
+  }
+  return requested;
 }
 
 export function registerTools(
@@ -899,7 +912,7 @@ export function registerTools(
       after: z.number().optional().describe("After timestamp (unix)"),
       before: z.number().optional().describe("Before timestamp (unix)"),
       format: z.enum(["jsonl", "json", "markdown", "csv"]).optional().default("jsonl").describe("Output format"),
-      output: z.string().describe("File path to write to"),
+      output: z.string().describe("File path to write to, relative to the wu exports directory (~/.wu/exports). An absolute path is also accepted but must resolve inside that directory; paths that escape it are rejected."),
       exclude_reactions: z.boolean().optional().default(false).describe("Skip reaction messages"),
       types: z.array(z.string()).optional().describe("Only export these message types (e.g. text, image, document)"),
       exclude_types: z.array(z.string()).optional().describe("Skip these message types (e.g. sticker, reaction)"),
@@ -911,13 +924,19 @@ export function registerTools(
       if (!shouldCollect(params.chat, cfg)) {
         return errorResult(`Chat ${params.chat} is blocked by constraints`);
       }
+      let output: string;
+      try {
+        output = resolveExportPath(params.output, EXPORTS_DIR);
+      } catch (err) {
+        return errorResult((err as Error).message);
+      }
       try {
         const result = exportMessages({
           chatJid: params.chat,
           after: params.after,
           before: params.before,
           format: params.format,
-          output: params.output,
+          output,
           excludeReactions: params.exclude_reactions,
           types: params.types,
           excludeTypes: params.exclude_types,
@@ -950,7 +969,7 @@ export function registerTools(
 
         const manifestTypes = params.enrich ? ENRICH_MANIFEST_MEDIA_TYPES : undefined;
         const rows = buildManifest(params.chat, params.after, params.before, MEDIA_DIR, manifestTypes);
-        const manifestFile = `${params.output}.manifest.jsonl`;
+        const manifestFile = `${output}.manifest.jsonl`;
         writeManifest(manifestFile, rows);
 
         return jsonResult({

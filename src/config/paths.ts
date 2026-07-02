@@ -7,6 +7,7 @@ export const AUTH_DIR = join(WU_HOME, "auth");
 export const DB_PATH = join(WU_HOME, "wu.db");
 export const CONFIG_PATH = join(WU_HOME, "config.yaml");
 export const MEDIA_DIR = join(WU_HOME, "media");
+export const EXPORTS_DIR = join(WU_HOME, "exports");
 export const LOCK_PATH = join(WU_HOME, "wu.lock");
 export const DAEMON_SOCK_PATH = join(WU_HOME, "daemon.sock");
 export const DAEMON_STATE_PATH = join(WU_HOME, "daemon-state.json");
