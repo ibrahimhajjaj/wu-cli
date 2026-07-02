@@ -69,6 +69,7 @@ function safeHandler(
 function parseMessage(msg: WAMessage): ParsedMessage | null {
   const jid = msg.key.remoteJid;
   if (!jid) return null;
+  if (!msg.key.id) return null; // no id → can't dedup or key the row; skip
 
   const content = getMessageContent(msg);
   let type = extractMessageType(content);
@@ -93,7 +94,7 @@ function parseMessage(msg: WAMessage): ParsedMessage | null {
         : Math.floor(Date.now() / 1000);
 
   return {
-    id: msg.key.id!,
+    id: msg.key.id,
     chatJid: jid,
     senderJid: msg.key.participant || (msg.key.fromMe ? null : jid),
     senderName: msg.pushName || null,
