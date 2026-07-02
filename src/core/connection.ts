@@ -301,7 +301,20 @@ export class ReconnectingConnection {
 
     this.sock = sock;
     this.flushCreds = flushCreds;
-    await waitForConnection(sock);
+    try {
+      await waitForConnection(sock);
+    } catch (err) {
+      const reason = err instanceof ConnectionError ? err.statusCode : 0;
+      const fatal =
+        reason === DisconnectReason.loggedOut ||
+        reason === DisconnectReason.badSession ||
+        reason === DisconnectReason.multideviceMismatch;
+      if (this.isDaemon && !fatal) {
+        if (!this.quiet) logger.warn({ reason }, "Initial connect failed - entering reconnect loop");
+        return sock;
+      }
+      throw err;
+    }
     return sock;
   }
 
