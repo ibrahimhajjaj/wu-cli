@@ -16,12 +16,15 @@ import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import { createGroup, leaveGroup, fetchAllGroups, fetchGroupMetadata, getInviteCode, renameGroup, joinGroupByInvite } from "../core/groups.js";
 import { backfillHistory } from "../core/backfill.js";
 import {
-  listChats, listMessages, searchMessages, searchChats,
+  listChats,
   listContacts, searchContacts, getGroupParticipants,
   getMessageCount, getMessageContext, upsertMessage,
   getFilteredMessageCount, getMessage, getMessagesByIds,
 } from "../core/store.js";
-import { listChatsForConfig, searchChatsForConfig, listDmsForConfig } from "../core/service.js";
+import {
+  listChatsForConfig, searchChatsForConfig, listDmsForConfig,
+  listMessagesForConfig, searchMessagesForConfig,
+} from "../core/service.js";
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
@@ -400,14 +403,13 @@ export function registerTools(
     async (params) => {
       try {
         const cfg = loadConfig();
-        const allResults = searchMessages(params.query, {
+        const results = searchMessagesForConfig(cfg, params.query, {
           chatJid: params.chat,
           senderJid: params.from,
-          limit: 10000,
+          limit: params.limit,
           after: params.after,
           before: params.before,
         });
-        const results = allResults.filter((r) => shouldCollect(r.chat_jid, cfg)).slice(0, params.limit);
         const quotedIds = results.map((r) => r.quoted_id).filter((x): x is string => !!x);
         const quotedMap = getMessagesByIds(quotedIds);
         const snippetFor = (qid: string | null) => {
@@ -467,15 +469,15 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      if (!shouldCollect(params.chat, cfg)) {
-        return errorResult(`Chat ${params.chat} is blocked by constraints`);
-      }
-      const messages = listMessages({
+      const messages = listMessagesForConfig(cfg, {
         chatJid: params.chat,
         limit: params.limit,
         before: params.before,
         after: params.after,
       });
+      if (messages === null) {
+        return errorResult(`Chat ${params.chat} is blocked by constraints`);
+      }
       return jsonResult(
         messages.map((m) => ({
           id: m.id,

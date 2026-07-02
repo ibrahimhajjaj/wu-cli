@@ -1,10 +1,9 @@
 import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
 import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
-import { listMessages, searchMessages, type SearchResult } from "../core/store.js";
+import { listMessagesForConfig, searchMessagesForConfig } from "../core/service.js";
 import { importMessagesJsonl } from "../core/import.js";
 import { loadConfig } from "../config/schema.js";
-import { shouldCollect } from "../core/constraints.js";
 import { outputResult, formatTimestamp } from "./format.js";
 import { EXIT_NOT_FOUND, EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
@@ -26,17 +25,17 @@ export function registerMessagesCommand(program: Command): void {
         opts: { limit: string; before?: string; after?: string; json?: boolean }
       ) => {
         const config = loadConfig();
-        if (!shouldCollect(jid, config)) {
-          console.log(`Chat ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
-          return;
-        }
-
-        const rows = listMessages({
+        const rows = listMessagesForConfig(config, {
           chatJid: jid,
           limit: parseInt(opts.limit, 10),
           before: opts.before ? parseInt(opts.before, 10) : undefined,
           after: opts.after ? parseInt(opts.after, 10) : undefined,
         });
+
+        if (rows === null) {
+          console.log(`Chat ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
+          return;
+        }
 
         if (rows.length === 0) {
           console.log("No messages found.");
@@ -70,12 +69,11 @@ export function registerMessagesCommand(program: Command): void {
       ) => {
         const config = loadConfig();
         const limit = parseInt(opts.limit, 10);
-        const allRows = searchMessages(query, {
+        const rows = searchMessagesForConfig(config, query, {
           chatJid: opts.chat,
           senderJid: opts.from,
-          limit: 10000,
+          limit,
         });
-        const rows = allRows.filter((r) => shouldCollect(r.chat_jid, config)).slice(0, limit);
 
         if (rows.length === 0) {
           console.log("No messages found.");
