@@ -37,6 +37,35 @@ function malformed(): Error {
   return new Error("database disk image is malformed");
 }
 
+// Monkey-patches db.prepare so the next .run() against a statement whose SQL
+// text contains `sqlMatch` throws a synthetic corruption error exactly once,
+// then behaves normally. We can't cheaply corrupt the real FTS shadow tables
+// (see comment above), so this drives the recovery through the actual
+// deleteMessage/markMessageDeleted call sites instead of calling
+// withFtsRecovery directly, proving the production wiring - not just the
+// wrapper in isolation - self-heals.
+function throwOnceOnRun(db: ReturnType<typeof database.getDb>, sqlMatch: string): () => void {
+  const originalPrepare = db.prepare.bind(db);
+  let thrown = false;
+  db.prepare = ((sql: string, ...rest: unknown[]) => {
+    const stmt = (originalPrepare as (...a: unknown[]) => ReturnType<typeof db.prepare>)(sql, ...rest);
+    if (sql.includes(sqlMatch)) {
+      const originalRun = stmt.run.bind(stmt);
+      stmt.run = ((...runArgs: unknown[]) => {
+        if (!thrown) {
+          thrown = true;
+          throw malformed();
+        }
+        return originalRun(...runArgs);
+      }) as typeof stmt.run;
+    }
+    return stmt;
+  }) as typeof db.prepare;
+  return () => {
+    db.prepare = originalPrepare;
+  };
+}
+
 describe("withFtsRecovery", () => {
   it("rebuilds and retries on a malformed error, then succeeds", () => {
     const before = store.getStoreHealth().fts_rebuilds;
@@ -110,5 +139,82 @@ describe("withFtsRecovery", () => {
     });
     const hit = store.searchMessages("recovery");
     assert.ok(hit.some((m) => m.id === "m1"), "row is stored and searchable");
+  });
+});
+
+function insertTextMessage(id: string, body: string, timestamp: number): void {
+  store.upsertMessage({
+    id,
+    chat_jid: "123@g.us",
+    sender_jid: "9@s.whatsapp.net",
+    sender_name: "Tester",
+    body,
+    type: "text",
+    media_mime: null,
+    media_path: null,
+    media_size: null,
+    media_direct_path: null,
+    media_key: null,
+    media_file_sha256: null,
+    media_file_enc_sha256: null,
+    media_file_length: null,
+    quoted_id: null,
+    location_lat: null,
+    location_lon: null,
+    location_name: null,
+    is_from_me: 0,
+    timestamp,
+    raw: "{}",
+  });
+}
+
+describe("withFtsRecovery on update/delete writes", () => {
+  it("markMessageDeleted recovers from a malformed error on the UPDATE trigger path", () => {
+    insertTextMessage("m-mark-deleted", "will be revoked", 1782291500);
+
+    const before = store.getStoreHealth().fts_rebuilds;
+    const db = database.getDb();
+    const restore = throwOnceOnRun(
+      db,
+      "UPDATE messages SET body = NULL, type = 'deleted', raw = NULL WHERE id = ?"
+    );
+    try {
+      store.markMessageDeleted("m-mark-deleted");
+    } finally {
+      restore();
+    }
+
+    assert.equal(
+      store.getStoreHealth().fts_rebuilds,
+      before + 1,
+      "rebuild counter should advance"
+    );
+    const row = db
+      .prepare("SELECT type, body, raw FROM messages WHERE id = ?")
+      .get("m-mark-deleted") as { type: string; body: string | null; raw: string | null };
+    assert.equal(row.type, "deleted");
+    assert.equal(row.body, null);
+    assert.equal(row.raw, null);
+  });
+
+  it("deleteMessage recovers from a malformed error on the DELETE trigger path", () => {
+    insertTextMessage("m-hard-deleted", "will be hard deleted", 1782291600);
+
+    const before = store.getStoreHealth().fts_rebuilds;
+    const db = database.getDb();
+    const restore = throwOnceOnRun(db, "DELETE FROM messages WHERE id = ?");
+    try {
+      store.deleteMessage("m-hard-deleted");
+    } finally {
+      restore();
+    }
+
+    assert.equal(
+      store.getStoreHealth().fts_rebuilds,
+      before + 1,
+      "rebuild counter should advance"
+    );
+    const row = db.prepare("SELECT id FROM messages WHERE id = ?").get("m-hard-deleted");
+    assert.equal(row, undefined, "row should be gone after recovery");
   });
 });

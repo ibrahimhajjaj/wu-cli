@@ -600,12 +600,14 @@ export function getMessageContext(
 
 export function deleteMessage(id: string): void {
   const db = getDb();
-  db.prepare("DELETE FROM messages WHERE id = ?").run(id);
+  withFtsRecovery(() => db.prepare("DELETE FROM messages WHERE id = ?").run(id));
 }
 
 export function markMessageDeleted(id: string): void {
   const db = getDb();
-  db.prepare(
-    "UPDATE messages SET body = NULL, type = 'deleted', raw = NULL WHERE id = ?"
-  ).run(id);
+  withFtsRecovery(() =>
+    db.prepare(
+      "UPDATE messages SET body = NULL, type = 'deleted', raw = NULL WHERE id = ?"
+    ).run(id)
+  );
 }

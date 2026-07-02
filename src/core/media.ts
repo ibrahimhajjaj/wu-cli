@@ -8,7 +8,7 @@ import {
 import { writeFileSync, mkdirSync, statSync, unlinkSync, existsSync, readdirSync } from "fs";
 import { join, extname, basename, resolve, sep } from "path";
 import type { WuConfig } from "../config/schema.js";
-import { getMessage, upsertMessage, deserializeWAMessage, type MessageRow } from "./store.js";
+import { getMessage, upsertMessage, deserializeWAMessage, withFtsRecovery, type MessageRow } from "./store.js";
 import { enrichFile, type Capability } from "./enrich.js";
 import { MEDIA_DIR } from "../config/paths.js";
 import { createChildLogger } from "../config/logger.js";
@@ -252,11 +252,13 @@ export async function enrichMessage(
   const column = capability === "transcribe" ? "transcript" : "ocr_text";
   const db = getDb();
   if (row.body) {
-    db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(text, msgId);
+    withFtsRecovery(() => db.prepare(`UPDATE messages SET ${column} = ? WHERE id = ?`).run(text, msgId));
   } else {
     // No caption: fold into body so it shows in exports and the FTS index picks
     // it up (the messages_fts triggers fire on body updates).
-    db.prepare(`UPDATE messages SET ${column} = ?, body = ? WHERE id = ?`).run(text, text, msgId);
+    withFtsRecovery(() =>
+      db.prepare(`UPDATE messages SET ${column} = ?, body = ? WHERE id = ?`).run(text, text, msgId)
+    );
   }
 
   return { msgId, capability, backend: config.enrich[capability].backend, chars: text.length };
