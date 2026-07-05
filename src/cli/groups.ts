@@ -185,7 +185,23 @@ export function registerGroupsCommand(program: Command): void {
     .option("--live", "Fetch live from WhatsApp")
     .action(async (jid: string, opts: { json?: boolean; live?: boolean }) => {
       const config = loadConfig();
-      if (!shouldCollect(jid, config)) {
+      const mode = resolveConstraint(jid, config);
+
+      if (mode === "none") {
+        const chat = getChat(jid);
+        if (chat && chat.type === "group") {
+          const info = {
+            jid,
+            name: chat.name,
+            participant_count: chat.participant_count,
+            is_community: chat.is_community === 1,
+            is_community_announce: chat.is_community_announce === 1,
+            linked_parent: chat.linked_parent,
+            constrained: true,
+          };
+          outputResult(info, { json: opts.json });
+          return;
+        }
         console.error(`Group ${jid} is blocked by constraints. Use \`wu config allow ${jid}\` to allow it.`);
         process.exit(EXIT_GENERAL_ERROR);
       }
@@ -223,7 +239,16 @@ export function registerGroupsCommand(program: Command): void {
       }
       const participants = getGroupParticipants(jid);
       outputResult(
-        { ...chat, participants },
+        {
+          jid: chat.jid,
+          name: chat.name,
+          description: chat.description,
+          participant_count: chat.participant_count,
+          is_community: chat.is_community === 1,
+          is_community_announce: chat.is_community_announce === 1,
+          linked_parent: chat.linked_parent,
+          participants,
+        },
         { json: opts.json }
       );
     });

@@ -337,5 +337,153 @@ describe("registerTools - visibility constraints", () => {
       schema.saveConfig(config());
     }
   });
+
+  it("wu_groups_info on a mode-none group with a cached row returns public metadata", async () => {
+    const { sock, calls } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    store.upsertChat({
+      jid: "blocked-but-cached@g.us",
+      name: "Blocked Group",
+      type: "group",
+      participant_count: 42,
+      description: "Secret desc",
+      last_message_at: 1700000000,
+      is_community: 1,
+      is_community_announce: 0,
+    });
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "blocked-but-cached@g.us": { mode: "none" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_groups_info");
+      const result = await tool!.handler({ jid: "blocked-but-cached@g.us" });
+      const parsed = JSON.parse(result.content[0].text);
+
+      assert.equal(parsed.jid, "blocked-but-cached@g.us");
+      assert.equal(parsed.name, "Blocked Group");
+      assert.equal(parsed.participant_count, 42);
+      assert.equal(parsed.is_community, true);
+      assert.equal(parsed.is_community_announce, false);
+      assert.equal(parsed.constrained, true);
+      assert.equal(parsed.participants, undefined);
+      assert.equal(parsed.description, undefined);
+      assert.equal(calls.length, 0);
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
+
+  it("wu_groups_info on a mode-none group with live: true still does not touch the socket", async () => {
+    const { sock, calls } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    store.upsertChat({
+      jid: "blocked-but-cached@g.us",
+      name: "Blocked Group",
+      type: "group",
+      participant_count: 42,
+      description: "Secret desc",
+      last_message_at: 1700000000,
+    });
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "blocked-but-cached@g.us": { mode: "none" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_groups_info");
+      const result = await tool!.handler({ jid: "blocked-but-cached@g.us", live: true });
+      const parsed = JSON.parse(result.content[0].text);
+
+      assert.equal(parsed.constrained, true);
+      assert.equal(calls.length, 0);
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
+
+  it("wu_groups_info on a mode-none group with no cached row returns an error", async () => {
+    const { sock, calls } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "blocked-uncached@g.us": { mode: "none" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_groups_info");
+      const result = await tool!.handler({ jid: "blocked-uncached@g.us" });
+
+      assert.equal(result.isError, true);
+      assert.match(JSON.parse(result.content[0].text).error, /blocked by constraints/);
+      assert.equal(calls.length, 0);
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
+
+  it("wu_groups_info on a blocked DM jid returns the error, not the cached contact name", async () => {
+    const { sock, calls } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    store.upsertChat({
+      jid: "333@s.whatsapp.net",
+      name: "Hidden Contact",
+      type: "dm",
+      participant_count: null,
+      description: null,
+      last_message_at: 1700000000,
+    });
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "333@s.whatsapp.net": { mode: "none" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_groups_info");
+      const result = await tool!.handler({ jid: "333@s.whatsapp.net" });
+
+      assert.equal(result.isError, true);
+      assert.match(JSON.parse(result.content[0].text).error, /blocked by constraints/);
+      assert.equal(calls.length, 0);
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
 });
 
