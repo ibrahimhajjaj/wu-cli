@@ -237,3 +237,105 @@ describe("registerTools - constraints round trip through the on-disk config", ()
     await setTool!.handler({ mode: "full" });
   });
 });
+
+describe("registerTools - visibility constraints", () => {
+  it("wu_constraints_list joins the cache", async () => {
+    const { sock } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    store.upsertChat({
+      jid: "known@g.us",
+      name: "Known Group",
+      type: "group",
+      participant_count: 5,
+      description: null,
+      last_message_at: 1700000000,
+    });
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "known@g.us": { mode: "read" },
+          "unknown@g.us": { mode: "full" },
+          "*@g.us": { mode: "none" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_constraints_list");
+      const result = await tool!.handler({});
+      const parsed = JSON.parse(result.content[0].text);
+
+      const known = parsed.chats.find((c: { jid: string }) => c.jid === "known@g.us");
+      const unknown = parsed.chats.find((c: { jid: string }) => c.jid === "unknown@g.us");
+      const wildcard = parsed.chats.find((c: { jid: string }) => c.jid === "*@g.us");
+
+      assert.equal(known.name, "Known Group");
+      assert.equal(known.participant_count, 5);
+
+      assert.equal(unknown.name, null);
+      assert.equal(unknown.participant_count, null);
+
+      assert.equal(wildcard.name, null);
+      assert.equal(wildcard.participant_count, null);
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
+
+  it("wu_constraints_list hides a blocked DM's cached name but shows an allowed DM's", async () => {
+    const { sock } = makeFakeSocket();
+    const { server, tools } = makeFakeMcp();
+
+    store.upsertChat({
+      jid: "111@s.whatsapp.net",
+      name: "Blocked Contact",
+      type: "dm",
+      participant_count: null,
+      description: null,
+      last_message_at: 1700000000,
+    });
+    store.upsertChat({
+      jid: "222@s.whatsapp.net",
+      name: "Allowed Contact",
+      type: "dm",
+      participant_count: null,
+      description: null,
+      last_message_at: 1700000000,
+    });
+
+    const cfg = schema.WuConfigSchema.parse({
+      constraints: {
+        default: "none",
+        chats: {
+          "111@s.whatsapp.net": { mode: "none" },
+          "222@s.whatsapp.net": { mode: "read" },
+        },
+      },
+    });
+    schema.saveConfig(cfg);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    toolsMod.registerTools(server as any, () => sock, cfg);
+
+    try {
+      const tool = tools.get("wu_constraints_list");
+      const result = await tool!.handler({});
+      const parsed = JSON.parse(result.content[0].text);
+
+      const blocked = parsed.chats.find((c: { jid: string }) => c.jid === "111@s.whatsapp.net");
+      const allowed = parsed.chats.find((c: { jid: string }) => c.jid === "222@s.whatsapp.net");
+
+      assert.equal(blocked.name, null);
+      assert.equal(blocked.mode, "none");
+      assert.equal(allowed.name, "Allowed Contact");
+    } finally {
+      schema.saveConfig(config());
+    }
+  });
+});
+

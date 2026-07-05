@@ -1272,7 +1272,7 @@ export function registerTools(
   // --- wu_constraints_list ---
   server.tool(
     "wu_constraints_list",
-    "List all constraints (what chats the agent can access and at what level)",
+    "List all constraints (what chats the agent can access and at what level). Rows include the cached chat name when available.",
     {},
     async () => {
       const cfg = loadConfig();
@@ -1280,10 +1280,22 @@ export function registerTools(
       const chats = cfg.constraints?.chats ?? {};
       return jsonResult({
         default: defaultMode,
-        chats: Object.entries(chats).map(([jid, c]) => ({
-          jid,
-          mode: c.mode,
-        })),
+        chats: Object.entries(chats).map(([jid, c]) => {
+          // Group headers are public (wu_groups_list already lists every
+          // known group), but a blocked DM stays as opaque here as
+          // wu_dms_list leaves it - its cached row carries the contact's
+          // name. Wildcards have no cache row at all.
+          const lookup =
+            !jid.startsWith("*") &&
+            (jid.endsWith("@g.us") || c.mode !== "none");
+          const row = lookup ? getChat(jid) : undefined;
+          return {
+            jid,
+            name: row?.name ?? null,
+            participant_count: row?.participant_count ?? null,
+            mode: c.mode,
+          };
+        }),
       });
     }
   );

@@ -6,7 +6,9 @@ import {
   setConfigValue,
   type ConstraintMode,
 } from "../config/schema.js";
-import { CONFIG_PATH } from "../config/paths.js";
+import { CONFIG_PATH, DB_PATH } from "../config/paths.js";
+import { getChat } from "../core/service.js";
+import { existsSync } from "fs";
 
 const VALID_MODES = ["full", "read", "none"] as const;
 
@@ -136,8 +138,20 @@ export function registerConfigCommand(program: Command): void {
       const entries = Object.entries(constraints.chats);
       const maxJid = Math.max(...entries.map(([jid]) => jid.length));
 
+      const dbExists = existsSync(cfg.db?.path || DB_PATH);
+      const maxMode = Math.max(...entries.map(([, { mode }]) => mode.length));
+
       for (const [jid, { mode }] of entries) {
-        console.log(`  ${jid.padEnd(maxJid)}  ${mode}`);
+        let namePart = "";
+        if (dbExists && !jid.startsWith("*")) {
+          const row = getChat(jid);
+          if (row?.name) {
+            const count = row.participant_count ? ` (${row.participant_count})` : "";
+            namePart = `  ${row.name}${count}`;
+          }
+        }
+        const modePad = namePart ? mode.padEnd(maxMode) : mode;
+        console.log(`  ${jid.padEnd(maxJid)}  ${modePad}${namePart}`);
       }
     });
 }
