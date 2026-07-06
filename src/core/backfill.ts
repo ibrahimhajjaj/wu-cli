@@ -69,7 +69,9 @@ export async function backfillHistory(
     .get(jid) as { id: string; timestamp: number; is_from_me: number } | undefined;
 
   if (!oldest) {
-    throw new Error(`No messages for ${jid}. Listen or sync first to get a reference message.`);
+    throw new Error(
+      `No messages cached for ${jid} yet - backfill anchors on the oldest known message, so at least one must exist first. Wait for a live message to arrive (the daemon collects going forward), then retry.`
+    );
   }
 
   const countBefore = (
@@ -87,12 +89,18 @@ export async function backfillHistory(
   // Register handler BEFORE sending request to avoid race condition
   const { promise, cleanup } = createBackfillWaiter(sock, jid, count, timeoutMs);
 
-  // Baileys assigns this to oldestMsgTimestampMs — needs milliseconds
-  const sessionId = await (sock as any).fetchMessageHistory(count, key, oldest.timestamp * 1000);
-  logger.debug({ sessionId }, "fetchMessageHistory returned session ID");
+  // Runs inside the long-lived daemon, so the waiter's event handler must be
+  // torn down even if the fetch throws before the wait completes.
+  try {
+    // Baileys assigns this to oldestMsgTimestampMs — needs milliseconds
+    const sessionId = await (sock as any).fetchMessageHistory(count, key, oldest.timestamp * 1000);
+    logger.debug({ sessionId }, "fetchMessageHistory returned session ID");
 
-  // Wait for messaging-history.set events (handler already registered)
-  await promise;
+    // Wait for messaging-history.set events (handler already registered)
+    await promise;
+  } finally {
+    cleanup();
+  }
 
   // Count new messages
   const countAfter = (

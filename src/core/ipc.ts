@@ -4,6 +4,7 @@ import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig } from "../config/schema.js";
 import { DAEMON_SOCK_PATH } from "../config/paths.js";
 import { downloadMedia, downloadMediaBatch } from "./media.js";
+import { backfillHistory } from "./backfill.js";
 import { collectUndownloadedMedia } from "./export.js";
 import { createChildLogger } from "../config/logger.js";
 
@@ -130,6 +131,15 @@ async function dispatch(
       const concurrencyRaw = Number(params.concurrency ?? 4);
       const concurrency = Number.isFinite(concurrencyRaw) && concurrencyRaw > 0 ? Math.floor(concurrencyRaw) : 4;
       return downloadMediaBatch(ids, sock, config, outDir, { concurrency });
+    }
+    case "history.backfill": {
+      const sock = requireSock();
+      const jid = String(params.jid);
+      const countRaw = Number(params.count ?? 50);
+      const count = Number.isFinite(countRaw) && countRaw > 0 ? Math.floor(countRaw) : 50;
+      const timeoutRaw = Number(params.timeoutMs ?? 30_000);
+      const timeoutMs = Number.isFinite(timeoutRaw) && timeoutRaw > 0 ? Math.floor(timeoutRaw) : 30_000;
+      return backfillHistory(sock, jid, count, config, { timeoutMs });
     }
     default:
       throw new Error(`Unknown IPC method: ${req.method}`);

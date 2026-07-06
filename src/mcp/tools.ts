@@ -1020,7 +1020,7 @@ export function registerTools(
   // --- wu_history_backfill ---
   server.tool(
     "wu_history_backfill",
-    "Request older message history from WhatsApp for a chat (on-demand backfill)",
+    "Request older message history from WhatsApp for a chat (on-demand backfill). Routes through the running daemon when one is present, so it works without stopping live collection. The chat must already have at least one cached message to anchor from.",
     {
       jid: z.string().describe("Chat JID to backfill"),
       count: z.number().optional().default(50).describe("Number of messages to request"),
@@ -1032,6 +1032,11 @@ export function registerTools(
           local: (sock) => backfillHistory(sock, params.jid, params.count, config, {
             timeoutMs: params.timeout_ms,
           }),
+          ipc: () => daemonRequest(
+            "history.backfill",
+            { jid: params.jid, count: params.count, timeoutMs: params.timeout_ms },
+            Math.max(300_000, params.timeout_ms + 30_000)
+          ),
           remoteArgs: [
             "history", "backfill", params.jid,
             "--count", String(params.count),
