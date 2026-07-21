@@ -203,3 +203,34 @@ describe("startListener - messages.update", () => {
     assert.equal(row!.type, "text", "update on a blocked chat must not mutate the message");
   });
 });
+
+describe("startListener - live config (setConfig)", () => {
+  it("starts collecting a group allowed after the listener is running, no restart", () => {
+    const { sock, emitUpsert } = makeFakeSocket();
+    const blocking = schema.WuConfigSchema.parse({
+      constraints: { default: "none" },
+    });
+    const handle = listener.startListener(sock, { config: blocking, quiet: true });
+
+    // Before: the group is not allowlisted, so its message is dropped.
+    emitUpsert([
+      textMessage({ chatJid: "late-allow@g.us", id: "live-1", body: "missed" }),
+    ]);
+    assert.equal(store.getMessage("live-1"), undefined, "blocked before allow");
+
+    // Swap in a config that allows the group - mimics `wu config allow`
+    // reaching the running daemon via the file watcher.
+    handle.setConfig(
+      schema.WuConfigSchema.parse({
+        constraints: { default: "none", chats: { "late-allow@g.us": { mode: "read" } } },
+      })
+    );
+
+    emitUpsert([
+      textMessage({ chatJid: "late-allow@g.us", id: "live-2", body: "captured" }),
+    ]);
+    const row = store.getMessage("live-2");
+    assert.ok(row, "message collected after the live allow");
+    assert.equal(row!.body, "captured");
+  });
+});

@@ -4,9 +4,10 @@ import { join } from "path";
 import { homedir } from "os";
 import { unlinkSync } from "fs";
 import { ReconnectingConnection } from "../core/connection.js";
-import { startListener } from "../core/listener.js";
+import { startListener, type ListenerHandle } from "../core/listener.js";
 import { DaemonState } from "../core/daemon-state.js";
 import { startDaemonIpc } from "../core/ipc.js";
+import { watchConfig } from "../core/config-watch.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
@@ -26,9 +27,13 @@ async function runDaemon(): Promise<void> {
     process.exit(EXIT_CONNECTION_FAILED);
   }
 
-  const config = loadConfig();
+  // `currentConfig` is the live collection config: the file watcher below swaps
+  // it in when config.yaml changes, and every reconnect's listener is built
+  // from it, so a group allowed after boot starts collecting without a restart.
+  let currentConfig = loadConfig();
   const startTime = Date.now();
   const state = new DaemonState();
+  let listener: ListenerHandle | undefined;
 
   const conn = new ReconnectingConnection({
     isDaemon: true,
@@ -37,7 +42,7 @@ async function runDaemon(): Promise<void> {
       log("● Connected — collecting messages");
       state.setOpen();
       state.attach(sock);
-      startListener(sock, { config, quiet: true, onMessage: () => state.markMessage() });
+      listener = startListener(sock, { config: currentConfig, quiet: true, onMessage: () => state.markMessage() });
     },
     onDisconnect: (reason) => {
       log("⚠ Disconnected — waiting for reconnection");
@@ -70,7 +75,7 @@ async function runDaemon(): Promise<void> {
   //   2. The ws still reports open but no frames arrive (deaf stream). Only this
   //      case needs the silence timer, kept long so an overnight-quiet account
   //      is not churned (each needless reconnect re-runs history sync).
-  const staleSeconds = config.whatsapp.watchdog_stale_seconds;
+  const staleSeconds = currentConfig.whatsapp.watchdog_stale_seconds;
   let warnedWsShape = false;
   const watchdogInterval = setInterval(() => {
     state.recordStoreHealth(getStoreHealth());
@@ -107,7 +112,16 @@ async function runDaemon(): Promise<void> {
 
   // IPC server — lets CLI/MCP media downloads reuse this live socket instead
   // of opening a second WhatsApp login (which would collide and drop both).
-  const stopIpc = startDaemonIpc(() => conn.getSock(), config);
+  const stopIpc = startDaemonIpc(() => conn.getSock(), currentConfig);
+
+  // Hot-reload the collection allowlist: a group allowed via `wu config allow`
+  // (or any other config write) starts collecting on the next event instead of
+  // silently dropping messages until the daemon is restarted.
+  const stopConfigWatch = watchConfig((next) => {
+    currentConfig = next;
+    listener?.setConfig(next);
+    log("● Config reloaded — collection allowlist updated");
+  });
 
   // Graceful shutdown
   const shutdown = async () => {
@@ -115,6 +129,7 @@ async function runDaemon(): Promise<void> {
     clearInterval(healthInterval);
     clearInterval(watchdogInterval);
     state.stop();
+    stopConfigWatch();
     stopIpc();
     await conn.stop();
     closeDb();

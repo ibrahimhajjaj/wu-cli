@@ -140,11 +140,22 @@ function parsedToRow(
   };
 }
 
+export interface ListenerHandle {
+  /**
+   * Swap the config the collection gate reads. The event handlers below close
+   * over the `config` binding, so reassigning it takes effect on the next
+   * event without re-registering anything - this is how the daemon applies a
+   * live `wu config allow` without a restart (a fresh startup snapshot would
+   * otherwise silently drop messages for any group allowed after boot).
+   */
+  setConfig: (config: WuConfig) => void;
+}
+
 export function startListener(
   sock: WASocket,
   opts: ListenerOptions
-): void {
-  const { config } = opts;
+): ListenerHandle {
+  let config = opts.config;
   const dedup = new FifoDedup(10000);
 
   // --- messages.upsert ---
@@ -525,4 +536,10 @@ export function startListener(
   );
 
   if (!opts.quiet) logger.info("Listener started — collecting messages");
+
+  return {
+    setConfig: (next: WuConfig) => {
+      config = next;
+    },
+  };
 }
