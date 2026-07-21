@@ -631,6 +631,35 @@ export function getMessageCount(): number {
   return row.count;
 }
 
+// Chats that have no stored messages at all - the raw signal behind both
+// priming (an allowed group waiting for its first message) and the silent-gap
+// guardrail (an allowed group whose metadata advanced but nothing was stored).
+// `minLastMessageAt` restricts to chats whose last_message_at is at least that
+// recent; omit it to include every message-less chat (last_message_at may be
+// null). The NOT EXISTS probe rides idx_msg_chat_ts.
+export interface MessagelessChat {
+  jid: string;
+  name: string | null;
+  type: string;
+  last_message_at: number | null;
+}
+
+export function listChatsWithoutMessages(minLastMessageAt?: number): MessagelessChat[] {
+  if (minLastMessageAt == null) {
+    return prepareCached(
+      `SELECT c.jid, c.name, c.type, c.last_message_at FROM chats c
+       WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.chat_jid = c.jid)
+       ORDER BY c.last_message_at DESC`
+    ).all() as MessagelessChat[];
+  }
+  return prepareCached(
+    `SELECT c.jid, c.name, c.type, c.last_message_at FROM chats c
+     WHERE NOT EXISTS (SELECT 1 FROM messages m WHERE m.chat_jid = c.jid)
+       AND c.last_message_at >= ?
+     ORDER BY c.last_message_at DESC`
+  ).all(minLastMessageAt) as MessagelessChat[];
+}
+
 export function getFilteredMessageCount(opts?: {
   chatJid?: string;
   after?: number;

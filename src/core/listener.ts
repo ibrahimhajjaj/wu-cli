@@ -47,6 +47,17 @@ export interface ListenerOptions {
   config: WuConfig;
   quiet?: boolean;
   onMessage?: (msg: ParsedMessage) => void;
+  /**
+   * Groups awaiting their first stored message so they can be primed (a
+   * newly-allowed group has no anchor for an on-demand history fetch until one
+   * message lands), mapped to their enrolled-at stamp. The daemon owns this map
+   * and mutates it in place across reconnects/config reloads; the listener only
+   * reads membership and clears an entry the moment it stores that group's
+   * first message.
+   */
+  primePending?: Map<string, number>;
+  /** Fire a best-effort history prime for `jid` on the daemon's live socket. */
+  onPrime?: (sock: WASocket, jid: string) => void;
 }
 
 function isStatusOrBroadcast(jid: string): boolean {
@@ -177,6 +188,14 @@ export function startListener(
         const content = getMessageContent(msg);
         const row = parsedToRow(parsed, content);
         upsertMessage(row);
+
+        // First stored message for a freshly-allowed group: it's now a valid
+        // anchor, so kick off a best-effort history prime. Clear first so a
+        // batch with several messages for this group only primes once.
+        if (opts.primePending?.has(jid)) {
+          opts.primePending.delete(jid);
+          opts.onPrime?.(sock, jid);
+        }
 
         // Update chat's last_message_at
         const chatType = jid.endsWith("@g.us") ? "group" : "dm";
@@ -531,6 +550,12 @@ export function startListener(
           msgRows.push(parsedToRow(parsed, content));
         }
         bulkUpsertMessages(msgRows);
+
+        // History sync already delivered these groups' messages, so drop any
+        // pending prime for them - no on-demand fetch needed.
+        if (opts.primePending) {
+          for (const r of msgRows) opts.primePending.delete(r.chat_jid);
+        }
       }
     )
   );

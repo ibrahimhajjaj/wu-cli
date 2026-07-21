@@ -234,3 +234,31 @@ describe("startListener - live config (setConfig)", () => {
     assert.equal(row!.body, "captured");
   });
 });
+
+describe("startListener - prime on first message", () => {
+  it("primes a pending group on its first stored message, once, and clears it", () => {
+    const { sock, emitUpsert } = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({ constraints: { default: "read" } });
+    const primePending = new Map<string, number>([["prime-me@g.us", 0]]);
+    const primed: string[] = [];
+    listener.startListener(sock, {
+      config,
+      quiet: true,
+      primePending,
+      onPrime: (_s, jid) => primed.push(jid),
+    });
+
+    // Two messages for the pending group in one batch: prime fires once.
+    emitUpsert([
+      textMessage({ chatJid: "prime-me@g.us", id: "pm-1", body: "first" }),
+      textMessage({ chatJid: "prime-me@g.us", id: "pm-2", body: "second" }),
+    ]);
+
+    assert.deepEqual(primed, ["prime-me@g.us"], "primed exactly once");
+    assert.ok(!primePending.has("prime-me@g.us"), "cleared from the pending set");
+
+    // A group that was never pending does not prime.
+    emitUpsert([textMessage({ chatJid: "other@g.us", id: "o-1", body: "x" })]);
+    assert.deepEqual(primed, ["prime-me@g.us"], "no prime for a non-pending group");
+  });
+});

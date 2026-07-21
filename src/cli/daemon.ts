@@ -8,6 +8,7 @@ import { startListener, type ListenerHandle } from "../core/listener.js";
 import { DaemonState } from "../core/daemon-state.js";
 import { startDaemonIpc } from "../core/ipc.js";
 import { watchConfig } from "../core/config-watch.js";
+import { computePrimePending, primeGroup, findSilentGaps } from "../core/primer.js";
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
@@ -35,6 +36,14 @@ async function runDaemon(): Promise<void> {
   const state = new DaemonState();
   let listener: ListenerHandle | undefined;
 
+  // Groups allowed but not yet collecting anything, mapped to their enrolled-at
+  // second: primed on their first stored message. Mutated in place (never
+  // reassigned) so the listener and the reload path share one map across
+  // reconnects.
+  const primePending = computePrimePending(currentConfig, Math.floor(Date.now() / 1000));
+  // Silent-gap warnings already emitted, so the guardrail flags each chat once.
+  const warnedGaps = new Set<string>();
+
   const conn = new ReconnectingConnection({
     isDaemon: true,
     quiet: true,
@@ -42,7 +51,16 @@ async function runDaemon(): Promise<void> {
       log("● Connected — collecting messages");
       state.setOpen();
       state.attach(sock);
-      listener = startListener(sock, { config: currentConfig, quiet: true, onMessage: () => state.markMessage() });
+      listener = startListener(sock, {
+        config: currentConfig,
+        quiet: true,
+        onMessage: () => state.markMessage(),
+        primePending,
+        onPrime: (s, jid) => {
+          log(`● Priming newly-allowed group ${jid}`);
+          void primeGroup(s, jid, currentConfig);
+        },
+      });
     },
     onDisconnect: (reason) => {
       log("⚠ Disconnected — waiting for reconnection");
@@ -120,14 +138,36 @@ async function runDaemon(): Promise<void> {
   const stopConfigWatch = watchConfig((next) => {
     currentConfig = next;
     listener?.setConfig(next);
+    // Re-enroll any group newly allowed by this edit for priming. Mutate the
+    // shared map in place so the running listener sees the change: drop entries
+    // no longer allowed, add new ones stamped now, and keep existing entries'
+    // original enrolled-at so an unrelated edit doesn't reset their clock.
+    const fresh = computePrimePending(next, Math.floor(Date.now() / 1000));
+    for (const jid of primePending.keys()) if (!fresh.has(jid)) primePending.delete(jid);
+    for (const [jid, at] of fresh) if (!primePending.has(jid)) primePending.set(jid, at);
     log("● Config reloaded — collection allowlist updated");
   });
+
+  // Silent-gap guardrail: since on-demand history recovery can't be guaranteed
+  // (it depends on the phone answering), never let a live-collection failure go
+  // unnoticed. Flags a pending group that saw activity AFTER it was enrolled yet
+  // stored nothing - not one that was simply allowed after its last message,
+  // whose earlier history the prime can't reach. Warns once per chat.
+  const gapCheckInterval = setInterval(() => {
+    for (const gap of findSilentGaps(primePending, Math.floor(Date.now() / 1000))) {
+      if (warnedGaps.has(gap.jid)) continue;
+      warnedGaps.add(gap.jid);
+      log(`⚠ ${gap.name || gap.jid} received messages after it was allowed but stored 0 — live collection may be failing`);
+    }
+  }, 5 * 60 * 1000);
+  gapCheckInterval.unref?.();
 
   // Graceful shutdown
   const shutdown = async () => {
     log("● Shutting down...");
     clearInterval(healthInterval);
     clearInterval(watchdogInterval);
+    clearInterval(gapCheckInterval);
     state.stop();
     stopConfigWatch();
     stopIpc();
