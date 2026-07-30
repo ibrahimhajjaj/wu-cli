@@ -38,18 +38,19 @@ describe("watchConfig", () => {
     );
 
     try {
-      // Write a config that newly allows a group - the daemon-side trigger.
-      schema.saveConfig(
-        schema.WuConfigSchema.parse({
-          constraints: { default: "none", chats: { "late@g.us": { mode: "read" } } },
-        })
-      );
+      // The config that newly allows a group - the daemon-side trigger.
+      const allowed = schema.WuConfigSchema.parse({
+        constraints: { default: "none", chats: { "late@g.us": { mode: "read" } } },
+      });
 
-      // Wait for the debounced watcher to observe and reload (fs.watch is
-      // event-driven but timing-loose; poll up to ~3s).
-      const deadline = Date.now() + 3000;
+      // fs.watch arms asynchronously (on macOS the FSEvents stream can miss
+      // writes issued right after watch() returns), so keep re-writing the same
+      // config until the watcher reports it. Rewriting is idempotent - the
+      // assertion is that the change is observed, not how many events fired.
+      const deadline = Date.now() + 15000;
       while (changes.length === 0 && Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 50));
+        schema.saveConfig(allowed);
+        await new Promise((r) => setTimeout(r, 100));
       }
 
       assert.ok(changes.length > 0, "watcher should have fired on the config write");
