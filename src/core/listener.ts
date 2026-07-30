@@ -414,7 +414,7 @@ export function startListener(
           linked_parent: group.linkedParent || null,
         });
 
-        if (group.participants && allowed) {
+        if (group.participants?.length && allowed) {
           upsertGroupParticipants(
             group.id,
             group.participants.map((p: any) => ({
@@ -443,7 +443,13 @@ export function startListener(
           jid: update.id,
           name: update.subject || null,
           type: "group",
-          participant_count: null,
+          // A participating-groups fetch (what WhatsApp's dirty-groups
+          // notification triggers) delivers the full roster here, so take the
+          // count from it. A partial update - a subject change, say - carries no
+          // participants, and null leaves the stored count untouched. An empty
+          // array is never a truthful count for a group we participate in, so it
+          // is treated as "unknown" rather than written as 0 over a good value.
+          participant_count: update.participants?.length || null,
           description: allowed ? update.desc || null : null,
           last_message_at: null,
           last_seen_at: now,
@@ -452,6 +458,21 @@ export function startListener(
             update.isCommunityAnnounce != null ? (update.isCommunityAnnounce ? 1 : 0) : null,
           linked_parent: update.linkedParent || null,
         });
+
+        // Same roster gate as groups.upsert: the participant list is only
+        // stored for chats the constraints allow collecting. The length check
+        // matters because the write replaces the stored roster, so an empty
+        // array would delete a good one.
+        if (update.participants?.length && allowed) {
+          upsertGroupParticipants(
+            update.id,
+            update.participants.map((p: { id: string; admin?: string | null }) => ({
+              jid: p.id,
+              isAdmin: p.admin === "admin" || p.admin === "superadmin",
+              isSuperAdmin: p.admin === "superadmin",
+            }))
+          );
+        }
       }
     })
   );

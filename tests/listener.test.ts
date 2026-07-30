@@ -235,6 +235,85 @@ describe("startListener - live config (setConfig)", () => {
   });
 });
 
+describe("startListener - groups.update metadata", () => {
+  it("stores participant_count and the roster from a full participating-groups update", () => {
+    const { sock, ev } = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({ constraints: { default: "read" } });
+    listener.startListener(sock, { config, quiet: true });
+
+    // Shape Baileys emits after a participating-groups fetch: full metadata,
+    // including the roster. This is the path that has to repopulate a store
+    // whose group rows were first created by an arriving message.
+    ev.emit("groups.update", [
+      {
+        id: "meta@g.us",
+        subject: "Meta Group",
+        desc: "a description",
+        isCommunity: false,
+        isCommunityAnnounce: false,
+        linkedParent: "parent@g.us",
+        participants: [
+          { id: "111@s.whatsapp.net", admin: "superadmin" },
+          { id: "222@s.whatsapp.net", admin: null },
+          { id: "333@s.whatsapp.net", admin: "admin" },
+        ],
+      },
+    ]);
+
+    const chat = store.listChats({ limit: 50 }).find((c) => c.jid === "meta@g.us");
+    assert.ok(chat, "chat row written");
+    assert.equal(chat!.participant_count, 3, "participant_count taken from the roster");
+    assert.equal(chat!.name, "Meta Group");
+    assert.equal(chat!.description, "a description");
+    assert.equal(chat!.linked_parent, "parent@g.us");
+
+    const roster = store.getGroupParticipants("meta@g.us");
+    assert.equal(roster.length, 3, "roster stored for an allowed group");
+    const admins = roster.filter((p) => p.is_admin).length;
+    assert.equal(admins, 2, "admin and superadmin both count as admin");
+  });
+
+  it("treats an empty participants array as unknown, not as a count of 0", () => {
+    const { sock, ev } = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({ constraints: { default: "read" } });
+    listener.startListener(sock, { config, quiet: true });
+
+    ev.emit("groups.update", [
+      {
+        id: "empty@g.us",
+        subject: "Has Members",
+        participants: [
+          { id: "1@s.whatsapp.net" },
+          { id: "2@s.whatsapp.net" },
+        ],
+      },
+    ]);
+    // A payload with no participant nodes must not overwrite the good count or
+    // wipe the roster, since the roster write replaces what is stored.
+    ev.emit("groups.update", [{ id: "empty@g.us", subject: "Has Members", participants: [] }]);
+
+    const chat = store.listChats({ limit: 50 }).find((c) => c.jid === "empty@g.us");
+    assert.equal(chat!.participant_count, 2, "count survives an empty payload");
+    assert.equal(store.getGroupParticipants("empty@g.us").length, 2, "roster survives");
+  });
+
+  it("leaves a stored count untouched when a partial update carries no participants", () => {
+    const { sock, ev } = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({ constraints: { default: "read" } });
+    listener.startListener(sock, { config, quiet: true });
+
+    ev.emit("groups.update", [
+      { id: "partial@g.us", subject: "First", participants: [{ id: "1@s.whatsapp.net" }] },
+    ]);
+    // A subject-only change: no participants field at all.
+    ev.emit("groups.update", [{ id: "partial@g.us", subject: "Renamed" }]);
+
+    const chat = store.listChats({ limit: 50 }).find((c) => c.jid === "partial@g.us");
+    assert.equal(chat!.name, "Renamed", "name updated");
+    assert.equal(chat!.participant_count, 1, "count preserved, not nulled");
+  });
+});
+
 describe("startListener - prime on first message", () => {
   it("primes a pending group on its first stored message, once, and clears it", () => {
     const { sock, emitUpsert } = makeFakeSocket();
