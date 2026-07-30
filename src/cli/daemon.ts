@@ -12,7 +12,8 @@ import { computePrimePending, primeGroup, findSilentGaps } from "../core/primer.
 import { acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
 import { closeDb } from "../db/database.js";
-import { getMessageCount, getStoreHealth } from "../core/store.js";
+import { getMessageCount, getStoreHealth, groupsMissingMetadata } from "../core/store.js";
+import { refreshGroupMetadata } from "../core/groups.js";
 import { generateDaemonService, resolveWuBin, checkLinger } from "../core/systemd.js";
 import { EXIT_CONNECTION_FAILED, EXIT_GENERAL_ERROR } from "./exit-codes.js";
 
@@ -61,6 +62,17 @@ async function runDaemon(): Promise<void> {
           void primeGroup(s, jid, currentConfig);
         },
       });
+
+      // Group metadata (participant counts, community flags) only arrives with a
+      // full participating-groups fetch. Message and chat events carry a name and
+      // nothing else, so on a store built from scratch those columns stay empty
+      // and the community tree is blind. Fill them once per connect when any
+      // group is still missing a count, rather than on every reconnect.
+      if (groupsMissingMetadata() > 0) {
+        void refreshGroupMetadata(sock, currentConfig)
+          .then(({ groups }) => log(`● Filled in group metadata (${groups} groups)`))
+          .catch((err) => log(`⚠ Group metadata refresh failed: ${(err as Error).message}`));
+      }
     },
     onDisconnect: (reason) => {
       log("⚠ Disconnected — waiting for reconnection");
@@ -130,7 +142,7 @@ async function runDaemon(): Promise<void> {
 
   // IPC server — lets CLI/MCP media downloads reuse this live socket instead
   // of opening a second WhatsApp login (which would collide and drop both).
-  const stopIpc = startDaemonIpc(() => conn.getSock(), currentConfig);
+  const stopIpc = startDaemonIpc(() => conn.getSock(), () => currentConfig);
 
   // Hot-reload the collection allowlist: a group allowed via `wu config allow`
   // (or any other config write) starts collecting on the next event instead of

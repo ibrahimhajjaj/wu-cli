@@ -74,7 +74,7 @@ export async function startMcpServer(): Promise<void> {
     startListener(sock, { config, quiet: true });
 
     // Expose the socket over IPC so concurrent CLI media downloads reuse it.
-    stopIpc = startDaemonIpc(getSock, config);
+    stopIpc = startDaemonIpc(getSock, () => config);
   }
 
   // Register tools and resources

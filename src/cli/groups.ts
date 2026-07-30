@@ -2,17 +2,16 @@ import { Command } from "commander";
 import { withConnection as _withConnection } from "../core/connection.js";
 import {
   fetchGroupMetadata,
-  fetchAllGroups,
+  refreshGroupMetadata,
   createGroup,
   getInviteCode,
   leaveGroup,
   renameGroup,
   joinGroupByInvite,
 } from "../core/groups.js";
+import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
 import {
   getGroupParticipants,
-  upsertChat,
-  upsertGroupParticipants,
   type ChatRow,
 } from "../core/store.js";
 import { listGroupsForConfig, getChat } from "../core/service.js";
@@ -105,38 +104,17 @@ export function registerGroupsCommand(program: Command): void {
 
         if (opts.live) {
           try {
-            await withConnection(async (sock) => {
-              const allGroups = await fetchAllGroups(sock);
-              const now = Math.floor(Date.now() / 1000);
-
-              const discoveryOn = config.whatsapp.group_discovery;
-              for (const g of Object.values(allGroups)) {
-                const allowed = shouldCollect(g.id, config);
-                if (!discoveryOn && !allowed) continue;
-                upsertChat({
-                  jid: g.id,
-                  name: g.subject || null,
-                  type: "group",
-                  participant_count: g.participants?.length || null,
-                  description: allowed ? g.desc || null : null,
-                  last_message_at: null,
-                  last_seen_at: now,
-                  is_community: (g as any).isCommunity ? 1 : 0,
-                  is_community_announce: (g as any).isCommunityAnnounce ? 1 : 0,
-                  linked_parent: (g as any).linkedParent || null,
-                });
-                if (g.participants && allowed) {
-                  upsertGroupParticipants(
-                    g.id,
-                    g.participants.map((p) => ({
-                      jid: p.id,
-                      isAdmin: p.admin === "admin" || p.admin === "superadmin",
-                      isSuperAdmin: p.admin === "superadmin",
-                    }))
-                  );
-                }
-              }
-            });
+            // A running daemon owns the only WhatsApp session, so ask it to do
+            // the fetch on that socket. Opening our own here would be a second
+            // login writing the same auth files.
+            if (await daemonIpcAvailable()) {
+              await daemonRequest("groups.refresh", {});
+            } else {
+              await _withConnection((sock) => refreshGroupMetadata(sock, config), {
+                quiet: true,
+                requireExclusive: true,
+              });
+            }
           } catch (err) {
             console.error("Failed to fetch groups:", (err as Error).message);
             process.exit(EXIT_GENERAL_ERROR);
@@ -208,20 +186,32 @@ export function registerGroupsCommand(program: Command): void {
 
       if (opts.live) {
         try {
-          await withConnection(async (sock) => {
-            const meta = await fetchGroupMetadata(sock, jid);
-            const info = {
+          type LiveMeta = {
+            id: string;
+            subject?: string | null;
+            desc?: string | null;
+            participants: { id: string; admin?: string | null }[];
+          };
+          // Prefer the daemon's socket over a competing login (see groups list).
+          const meta: LiveMeta = (await daemonIpcAvailable())
+            ? await daemonRequest<LiveMeta>("groups.metadata", { jid })
+            : await _withConnection(
+                (sock) => fetchGroupMetadata(sock, jid) as Promise<LiveMeta>,
+                { quiet: true, requireExclusive: true }
+              );
+          outputResult(
+            {
               jid: meta.id,
               name: meta.subject,
               description: meta.desc,
-              participant_count: meta.participants.length,
-              participants: meta.participants.map((p) => ({
+              participant_count: (meta.participants ?? []).length,
+              participants: (meta.participants ?? []).map((p) => ({
                 jid: p.id,
                 admin: p.admin || null,
               })),
-            };
-            outputResult(info, { json: opts.json });
-          });
+            },
+            { json: opts.json }
+          );
         } catch (err) {
           console.error((err as Error).message);
           process.exit(EXIT_GENERAL_ERROR);

@@ -5,6 +5,7 @@ import type { WuConfig } from "../config/schema.js";
 import { DAEMON_SOCK_PATH } from "../config/paths.js";
 import { downloadMedia, downloadMediaBatch } from "./media.js";
 import { backfillHistory } from "./backfill.js";
+import { refreshGroupMetadata, fetchGroupMetadata } from "./groups.js";
 import { collectUndownloadedMedia } from "./export.js";
 import { createChildLogger } from "../config/logger.js";
 
@@ -29,9 +30,12 @@ interface IpcResponse {
 
 // --- Server (runs inside the daemon) ---
 
+// `getConfig` is read per request, not captured: the collection allowlist is
+// hot-reloaded at runtime, so a config snapshot taken at startup would leave IPC
+// requests gating on a stale copy.
 export function startDaemonIpc(
   getSock: () => WASocket | undefined,
-  config: WuConfig,
+  getConfig: () => WuConfig,
   sockPath: string = DAEMON_SOCK_PATH
 ): () => void {
   // Clear a stale socket left by a crash so bind() succeeds.
@@ -47,7 +51,7 @@ export function startDaemonIpc(
       while ((nl = buffer.indexOf("\n")) !== -1) {
         const line = buffer.slice(0, nl);
         buffer = buffer.slice(nl + 1);
-        if (line.trim()) void handleLine(conn, line, getSock, config);
+        if (line.trim()) void handleLine(conn, line, getSock, getConfig);
       }
     });
     conn.on("error", () => { /* client went away mid-request */ });
@@ -72,7 +76,7 @@ async function handleLine(
   conn: Socket,
   line: string,
   getSock: () => WASocket | undefined,
-  config: WuConfig
+  getConfig: () => WuConfig
 ): Promise<void> {
   let req: IpcRequest;
   try {
@@ -87,7 +91,7 @@ async function handleLine(
   };
 
   try {
-    const result = await dispatch(req, getSock, config);
+    const result = await dispatch(req, getSock, getConfig);
     respond({ ok: true, result });
   } catch (err) {
     respond({ ok: false, error: (err as Error).message });
@@ -97,9 +101,10 @@ async function handleLine(
 async function dispatch(
   req: IpcRequest,
   getSock: () => WASocket | undefined,
-  config: WuConfig
+  getConfig: () => WuConfig
 ): Promise<unknown> {
   const params = req.params || {};
+  const config = getConfig();
 
   if (req.method === "ping") return { pong: true };
 
@@ -131,6 +136,14 @@ async function dispatch(
       const concurrencyRaw = Number(params.concurrency ?? 4);
       const concurrency = Number.isFinite(concurrencyRaw) && concurrencyRaw > 0 ? Math.floor(concurrencyRaw) : 4;
       return downloadMediaBatch(ids, sock, config, outDir, { concurrency });
+    }
+    case "groups.refresh": {
+      const sock = requireSock();
+      return refreshGroupMetadata(sock, config);
+    }
+    case "groups.metadata": {
+      const sock = requireSock();
+      return fetchGroupMetadata(sock, String(params.jid));
     }
     case "history.backfill": {
       const sock = requireSock();

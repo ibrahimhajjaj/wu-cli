@@ -644,6 +644,16 @@ export interface MessagelessChat {
   last_message_at: number | null;
 }
 
+// Group rows still missing their participant count - the marker of a store whose
+// group metadata was never filled in by a full participating-groups fetch (rows
+// created by arriving messages carry a name at most).
+export function groupsMissingMetadata(): number {
+  const row = prepareCached(
+    "SELECT COUNT(*) as count FROM chats WHERE type = 'group' AND participant_count IS NULL"
+  ).get() as { count: number };
+  return row.count;
+}
+
 export function listChatsWithoutMessages(minLastMessageAt?: number): MessagelessChat[] {
   if (minLastMessageAt == null) {
     return prepareCached(

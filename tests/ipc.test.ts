@@ -38,7 +38,7 @@ describe("daemon IPC transport", () => {
   before(() => {
     // No live socket — exercises the request/response framing and the
     // "not connected" path without needing WhatsApp.
-    stop = ipc.startDaemonIpc(() => undefined as unknown as WASocket, {} as WuConfig, SOCK);
+    stop = ipc.startDaemonIpc(() => undefined as unknown as WASocket, () => ({}) as WuConfig, SOCK);
   });
 
   after(() => stop());
@@ -69,6 +69,17 @@ describe("daemon IPC transport", () => {
   it("rejects history.backfill when the daemon has no socket", async () => {
     await assert.rejects(
       () => ipc.daemonRequest("history.backfill", { jid: "team@g.us" }, 5000, SOCK),
+      /not connected/i
+    );
+  });
+
+  it("exposes the group-metadata methods and gates them on a live socket", async () => {
+    await assert.rejects(
+      () => ipc.daemonRequest("groups.refresh", {}, 5000, SOCK),
+      /not connected/i
+    );
+    await assert.rejects(
+      () => ipc.daemonRequest("groups.metadata", { jid: "team@g.us" }, 5000, SOCK),
       /not connected/i
     );
   });
@@ -140,7 +151,7 @@ describe("daemon IPC history.backfill routing", () => {
 
     stopBf = ipc.startDaemonIpc(
       () => sock as unknown as WASocket,
-      { constraints: { default: "full", chats: {} } } as unknown as WuConfig,
+      () => ({ constraints: { default: "full", chats: {} } }) as unknown as WuConfig,
       BF_SOCK
     );
 
