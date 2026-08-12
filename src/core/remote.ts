@@ -39,6 +39,35 @@ function sshControlArgs(): string[] {
 
 const DEFAULT_SSH_TIMEOUT = 30_000;
 
+export interface SshFailure {
+  code?: number | string;
+  killed?: boolean;
+  signal?: string;
+  message?: string;
+}
+
+/**
+ * Why an ssh invocation failed, in words.
+ *
+ * A command that we killed, or that died on a signal, never got to write to
+ * stderr, so the raw stream is empty. Passing that straight to the caller
+ * produces a reason-less "failed: " that reads like a bug in the caller rather
+ * than a timeout, so the cause is spelled out here instead.
+ */
+export function describeSshFailure(
+  err: SshFailure | null,
+  stderr: string,
+  timeoutMs: number
+): string {
+  if (stderr) return stderr;
+  if (!err) return "";
+  if (err.killed || err.signal) {
+    return `ssh was killed after ${timeoutMs}ms${err.signal ? ` (${err.signal})` : ""} - the remote command needed longer than the timeout allowed for it`;
+  }
+  if (typeof err.code === "string") return `ssh could not run (${err.code})`;
+  return err.message || `ssh exited ${typeof err.code === "number" ? err.code : 1}`;
+}
+
 function spawnSsh(
   args: string[],
   retries = 1,
@@ -46,9 +75,16 @@ function spawnSsh(
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     execFile("ssh", args, { timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      const exitCode = err ? (err as any).code ?? 1 : 0;
+      const e = err as (Error & { code?: number | string; killed?: boolean; signal?: string }) | null;
+      // execFile reports spawn-level problems as a string code (ENOENT, E2BIG),
+      // so only a numeric code is the remote command's own exit status.
+      const exitCode = e ? (typeof e.code === "number" ? e.code : 1) : 0;
 
-      // Retry on transient SSH errors
+      const why = describeSshFailure(e, stderr || "", timeoutMs);
+
+      // Retry on transient SSH transport errors. Tested against ssh's own
+      // stderr, not the synthesized reason above, so a command we killed for
+      // running long is never retried into the same wall.
       if (
         retries > 0 &&
         exitCode !== 0 &&
@@ -60,7 +96,7 @@ function spawnSsh(
         return;
       }
 
-      resolve({ stdout: stdout || "", stderr: stderr || "", exitCode });
+      resolve({ stdout: stdout || "", stderr: why, exitCode });
     });
   });
 }
