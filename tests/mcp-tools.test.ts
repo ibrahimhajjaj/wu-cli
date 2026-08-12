@@ -226,7 +226,11 @@ describe("registerTools - constraints round trip through the on-disk config", ()
 
     const setTool = tools.get("wu_constraints_default");
     const setResult = await setTool!.handler({ mode: "read" });
-    assert.deepEqual(JSON.parse(setResult.content[0].text), { default: "read" });
+    const setJson = JSON.parse(setResult.content[0].text);
+    assert.equal(setJson.default, "read");
+    // No remote is configured in this fixture, so the write applies here and the
+    // caller is told this box is the one doing the collecting.
+    assert.equal(setJson.collector, "this machine is the collector");
 
     const showTool = tools.get("wu_config_show");
     const showResult = await showTool!.handler({});

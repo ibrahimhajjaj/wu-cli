@@ -2,10 +2,16 @@ import { Command } from "commander";
 import { stringify as stringifyYaml } from "yaml";
 import {
   loadConfig,
-  saveConfig,
   setConfigValue,
   type ConstraintMode,
 } from "../config/schema.js";
+import {
+  saveConstraints,
+  propagateConstraints,
+  describePropagation,
+  type PropagateResult,
+} from "../core/constraint-sync.js";
+import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
 import { CONFIG_PATH, DB_PATH } from "../config/paths.js";
 import { getChat } from "../core/service.js";
 import { existsSync } from "fs";
@@ -14,6 +20,15 @@ const VALID_MODES = ["full", "read", "none"] as const;
 
 function isValidMode(v: string): v is ConstraintMode {
   return (VALID_MODES as readonly string[]).includes(v);
+}
+
+// A constraint that never reached the collector is worse than a failed write,
+// because the local config then disagrees with what is actually being collected.
+// Say so and exit non-zero rather than printing a success line only.
+function reportSync(result: PropagateResult): void {
+  const note = describePropagation(result);
+  if (note) console.log(note);
+  if (result.status === "failed") process.exit(EXIT_GENERAL_ERROR);
 }
 
 function ensureConstraints(config: ReturnType<typeof loadConfig>) {
@@ -37,11 +52,16 @@ export function registerConfigCommand(program: Command): void {
   config
     .command("set <path> <value>")
     .description("Set a config value (dot-notation path)")
-    .action((dotPath: string, value: string) => {
+    .action(async (dotPath: string, value: string) => {
       const updated = setConfigValue(dotPath, value);
       console.log(
         `Set ${dotPath} = ${JSON.stringify((updated as Record<string, unknown>)[dotPath.split(".")[0]])}`
       );
+      // Constraints reached this way have to travel to the collector too - this
+      // is the command `wu remote setup --push` points people at.
+      if (dotPath.split(".")[0] === "constraints") {
+        reportSync(await propagateConstraints(loadConfig()));
+      }
     });
 
   config
@@ -57,7 +77,7 @@ export function registerConfigCommand(program: Command): void {
     .command("allow <jid>")
     .description("Allow a chat (full access: read + write + manage)")
     .option("--mode <mode>", "Access mode: full or read (default: full)", "full")
-    .action((jid: string, opts: { mode: string }) => {
+    .action(async (jid: string, opts: { mode: string }) => {
       const mode = opts.mode;
       if (mode !== "full" && mode !== "read") {
         console.error(`Invalid mode "${mode}". Use "full" or "read".`);
@@ -67,31 +87,34 @@ export function registerConfigCommand(program: Command): void {
       const cfg = loadConfig();
       const constraints = ensureConstraints(cfg);
       constraints.chats[jid] = { mode };
-      saveConfig(cfg);
+      const sync = await saveConstraints(cfg);
       console.log(`${jid} → ${mode}`);
+      reportSync(sync);
     });
 
   config
     .command("block <jid>")
     .description("Block a chat (drop all messages, no access)")
-    .action((jid: string) => {
+    .action(async (jid: string) => {
       const cfg = loadConfig();
       const constraints = ensureConstraints(cfg);
       constraints.chats[jid] = { mode: "none" };
-      saveConfig(cfg);
+      const sync = await saveConstraints(cfg);
       console.log(`${jid} → none`);
+      reportSync(sync);
     });
 
   config
     .command("remove <jid>")
     .description("Remove a chat constraint (falls back to default)")
-    .action((jid: string) => {
+    .action(async (jid: string) => {
       const cfg = loadConfig();
       const constraints = ensureConstraints(cfg);
       if (constraints.chats[jid]) {
         delete constraints.chats[jid];
-        saveConfig(cfg);
+        const sync = await saveConstraints(cfg);
         console.log(`Removed ${jid} — falls back to default (${constraints.default})`);
+        reportSync(sync);
       } else {
         console.log(`No constraint found for ${jid}`);
       }
@@ -100,7 +123,7 @@ export function registerConfigCommand(program: Command): void {
   config
     .command("default [mode]")
     .description("Get or set the default constraint mode (full, read, none)")
-    .action((mode?: string) => {
+    .action(async (mode?: string) => {
       if (!mode) {
         const cfg = loadConfig();
         const def = cfg.constraints?.default ?? "none";
@@ -116,8 +139,9 @@ export function registerConfigCommand(program: Command): void {
       const cfg = loadConfig();
       const constraints = ensureConstraints(cfg);
       constraints.default = mode;
-      saveConfig(cfg);
+      const sync = await saveConstraints(cfg);
       console.log(`Default constraint → ${mode}`);
+      reportSync(sync);
     });
 
   config

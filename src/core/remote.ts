@@ -2,7 +2,7 @@ import { execFile, execFileSync } from "child_process";
 import { existsSync, renameSync, unlinkSync, statSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { WuConfig, RemoteConfig } from "../config/schema.js";
-import { WU_HOME } from "../config/paths.js";
+import { WU_HOME, NO_PROPAGATE_ENV } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
 
 // --- Shell escaping (POSIX-safe) ---
@@ -86,7 +86,9 @@ export async function sshWuExec(
   opts?: SshExecOptions,
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const escaped = wuArgs.map(shellEscape).join(" ");
-  const command = `env WU_HOME=${remotePath(remote.wu_home)} wu ${escaped}`;
+  // Marks this as already running on the collector, so a constraint write
+  // invoked here does not try to push onward from the box.
+  const command = `env WU_HOME=${remotePath(remote.wu_home)} ${NO_PROPAGATE_ENV}=1 wu ${escaped}`;
   return sshRawExec(remote, command, opts);
 }
 

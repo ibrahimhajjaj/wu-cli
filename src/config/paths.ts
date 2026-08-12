@@ -3,6 +3,11 @@ import { homedir } from "os";
 import { join } from "path";
 
 export const WU_HOME = process.env.WU_HOME || join(homedir(), ".wu");
+
+// Set on a wu invoked over SSH on the collector, so a constraint write running
+// there does not try to push onward. Lives here because both the SSH wrapper and
+// the propagation code need the name and neither may import the other.
+export const NO_PROPAGATE_ENV = "WU_NO_PROPAGATE";
 export const AUTH_DIR = join(WU_HOME, "auth");
 export const DB_PATH = join(WU_HOME, "wu.db");
 export const CONFIG_PATH = join(WU_HOME, "config.yaml");

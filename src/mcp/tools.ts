@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { WASocket } from "@whiskeysockets/baileys";
 import type { WuConfig, RemoteConfig } from "../config/schema.js";
-import { loadConfig, saveConfig } from "../config/schema.js";
+import { loadConfig } from "../config/schema.js";
 import { resolveConstraint, shouldCollect } from "../core/constraints.js";
 import { existsSync, unlinkSync } from "fs";
 import { resolve, sep, isAbsolute } from "path";
@@ -28,6 +28,7 @@ import {
 import { getDb } from "../db/database.js";
 import { exportMessages, collectUndownloadedMedia, collectEnrichTargets, buildManifest, writeManifest, quotedSnippet, ENRICH_MANIFEST_MEDIA_TYPES } from "../core/export.js";
 import { sshWuExec, syncDb, syncMedia } from "../core/remote.js";
+import { saveConstraints, type PropagateResult } from "../core/constraint-sync.js";
 import { MEDIA_DIR } from "../config/paths.js";
 
 const MEDIA_SSH_TIMEOUT_MS = 300_000;
@@ -36,6 +37,18 @@ function jsonResult(data: unknown) {
   return {
     content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
   };
+}
+
+// Whether the machine that actually does the collecting now has this change.
+// Surfaced on every constraint write so an agent never assumes a local save
+// means the collector is enforcing it.
+function collectorState(result: PropagateResult): string {
+  if (result.status === "pushed") return `applied on ${result.remote}`;
+  // An unresolvable remote is reported as a failure, not a skip, so a skip here
+  // really does mean this machine is the one collecting.
+  return result.reason === "no remote configured" || result.reason === "running on the collector"
+    ? "this machine is the collector"
+    : `not applied (${result.reason})`;
 }
 
 function errorResult(message: string) {
@@ -1328,7 +1341,7 @@ export function registerTools(
   // --- wu_constraints_set ---
   server.tool(
     "wu_constraints_set",
-    "Set a constraint for a chat (allow/block). Mode: full (read+write+manage), read (collect only), none (blocked)",
+    "Set a constraint for a chat (allow/block). Mode: full (read+write+manage), read (collect only), none (blocked). In remote mode the change is also applied on the collector, since that is the machine whose config decides what gets stored; check `collector` in the result to confirm it landed.",
     {
       jid: z.string().describe("Chat JID or wildcard (e.g. *@g.us)"),
       mode: z.enum(["full", "read", "none"]).describe("Constraint mode"),
@@ -1339,8 +1352,13 @@ export function registerTools(
         cfg.constraints = { default: "none", chats: {} };
       }
       cfg.constraints.chats[params.jid] = { mode: params.mode };
-      saveConfig(cfg);
-      return jsonResult({ jid: params.jid, mode: params.mode });
+      const sync = await saveConstraints(cfg);
+      if (sync.status === "failed") {
+        return errorResult(
+          `Saved locally but NOT applied on ${sync.remote ?? "the collector"}, which keeps using its old rules: ${sync.error}. Run \`${sync.hint}\` to finish.`
+        );
+      }
+      return jsonResult({ jid: params.jid, mode: params.mode, collector: collectorState(sync) });
     }
   );
 
@@ -1353,11 +1371,17 @@ export function registerTools(
     },
     async (params) => {
       const cfg = loadConfig();
-      if (cfg.constraints?.chats) {
-        delete cfg.constraints.chats[params.jid];
-        saveConfig(cfg);
+      if (!cfg.constraints?.chats || !(params.jid in cfg.constraints.chats)) {
+        return jsonResult({ removed: params.jid, changed: false });
       }
-      return jsonResult({ removed: params.jid });
+      delete cfg.constraints.chats[params.jid];
+      const sync = await saveConstraints(cfg);
+      if (sync.status === "failed") {
+        return errorResult(
+          `Saved locally but NOT applied on ${sync.remote ?? "the collector"}, which keeps using its old rules: ${sync.error}. Run \`${sync.hint}\` to finish.`
+        );
+      }
+      return jsonResult({ removed: params.jid, changed: true, collector: collectorState(sync) });
     }
   );
 
@@ -1376,8 +1400,13 @@ export function registerTools(
         } else {
           cfg.constraints.default = params.mode;
         }
-        saveConfig(cfg);
-        return jsonResult({ default: params.mode });
+        const sync = await saveConstraints(cfg);
+        if (sync.status === "failed") {
+          return errorResult(
+            `Saved locally but NOT applied on ${sync.remote ?? "the collector"}, which keeps using its old rules: ${sync.error}. Run \`${sync.hint}\` to finish.`
+          );
+        }
+        return jsonResult({ default: params.mode, collector: collectorState(sync) });
       }
       const cfg = loadConfig();
       return jsonResult({ default: cfg.constraints?.default ?? "none" });
