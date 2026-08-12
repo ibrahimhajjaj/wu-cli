@@ -107,9 +107,10 @@ export function registerTools(
         spec.remoteTimeoutMs ? { timeoutMs: spec.remoteTimeoutMs } : undefined
       );
       if (res.exitCode !== 0) {
-        throw new Error(
-          spec.remoteErrorPrefix ? `${spec.remoteErrorPrefix}: ${res.stderr}` : (res.stderr || "remote command failed")
-        );
+        // Never report a prefix with nothing after it: a reason-less failure is
+        // indistinguishable from a bug in the caller.
+        const why = res.stderr.trim() || `remote command exited ${res.exitCode} without output`;
+        throw new Error(spec.remoteErrorPrefix ? `${spec.remoteErrorPrefix}: ${why}` : why);
       }
       const parsed = res.stdout ? JSON.parse(res.stdout) : null;
       await spec.afterRemote?.(parsed);
@@ -1056,6 +1057,11 @@ export function registerTools(
             "--timeout", String(params.timeout_ms),
             "--json",
           ],
+          // The remote command waits timeout_ms for history to arrive, so the SSH
+          // call has to outlive that plus login and startup. Giving it exactly
+          // timeout_ms killed the connection at the moment the command was still
+          // waiting, which surfaced as a failure with no reason attached.
+          remoteTimeoutMs: Math.max(300_000, params.timeout_ms + 30_000),
           remoteErrorPrefix: "Remote backfill failed",
           afterRemote: async () => {
             // Sync DB to pull new messages locally
