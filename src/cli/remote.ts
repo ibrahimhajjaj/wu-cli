@@ -1,8 +1,9 @@
 import { Command } from "commander";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parse as parseYaml } from "yaml";
 import { loadConfig, saveConfig, WuConfigSchema } from "../config/schema.js";
-import { sshRawExec, sshWuExec, remotePath, shellEscape } from "../core/remote.js";
+import { sshRawExec, sshWuExec, remotePath } from "../core/remote.js";
 import { EXIT_GENERAL_ERROR } from "./exit-codes.js";
+import { pushConstraintsTo } from "../core/constraint-sync.js";
 
 export function registerRemoteCommand(program: Command): void {
   const remote = program
@@ -138,28 +139,9 @@ export function registerRemoteCommand(program: Command): void {
           process.exit(EXIT_GENERAL_ERROR);
         }
 
-        // Read remote config, merge constraints, write back
-        const configPath = remotePath(remoteConfig.wu_home + "/config.yaml");
-        const readResult = await sshRawExec(remoteConfig, `cat ${configPath} 2>/dev/null || echo ""`);
-        let remoteFullConfig;
-        try {
-          const parsed = parseYaml(readResult.stdout);
-          remoteFullConfig = WuConfigSchema.parse(parsed || {});
-        } catch {
-          remoteFullConfig = WuConfigSchema.parse({});
-        }
-
-        // Merge local constraints into remote config
-        remoteFullConfig.constraints = config.constraints;
-
-        // Write back
-        const yaml = stringifyYaml(remoteFullConfig);
-        const writeResult = await sshRawExec(
-          remoteConfig,
-          `cat > ${configPath} << 'WU_EOF'\n${yaml}WU_EOF`,
-        );
-        if (writeResult.exitCode !== 0) {
-          console.error(`Failed to write remote config: ${writeResult.stderr}`);
+        const pushed = await pushConstraintsTo(name, remoteConfig, config);
+        if (pushed.status !== "pushed") {
+          console.error(`Failed to push constraints: ${pushed.error ?? pushed.reason}`);
           process.exit(EXIT_GENERAL_ERROR);
         }
 
