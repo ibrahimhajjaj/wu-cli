@@ -1034,7 +1034,7 @@ export function registerTools(
   // --- wu_history_backfill ---
   server.tool(
     "wu_history_backfill",
-    "Request older message history from WhatsApp for a chat (on-demand backfill). Routes through the running daemon when one is present, so it works without stopping live collection. The chat must already have at least one cached message to anchor from.",
+    "Request older message history from WhatsApp for a chat (on-demand backfill). Routes through the running daemon when one is present, so it works without stopping live collection. The chat must already have at least one cached message to anchor from. IMPORTANT: this asks the account's primary phone to send the history; it does not read it from the server. A result of newMessages: 0 is a normal outcome, not an error - it means the phone did not supply history for that window (offline, or the account does not share history with this linked device). Retrying or raising count will not change that, so treat 0 as \"unavailable\" and do not loop.",
     {
       jid: z.string().describe("Chat JID to backfill"),
       count: z.number().optional().default(50).describe("Number of messages to request"),

@@ -57,6 +57,24 @@ messages into SQLite; the CLI and an MCP server read/act through it.
   auth dir `0700`, and the daemon IPC socket is created `0600`. Keep any new
   sensitive path you add under `WU_HOME` owner-only too.
 
+## Known limitations (not bugs - don't chase these)
+
+- **Old history is mostly unreachable.** `wu history backfill` calls Baileys'
+  `fetchMessageHistory`, which sends a `HISTORY_SYNC_ON_DEMAND` peer request to
+  the account's *primary phone* - it does not read history off a server. Nothing
+  arrives unless that phone is online and the account shares history with this
+  linked device, and there is no rejection signal, so the request simply times
+  out and reports `newMessages: 0`. Practical consequence: a chat is recoverable
+  only from the moment collection starts. `0` is the expected answer, not a
+  failure, and raising `count` or retrying does not change it. A newly allowed
+  group is primed once on its first stored message (`src/core/primer.ts`) on the
+  chance the phone does answer; when it doesn't, forward collection is the
+  whole story.
+- Group metadata (participant counts, community flags) only arrives with a full
+  participating-groups fetch, not with message events, so a store built from
+  scratch fills those in on the daemon's first connect
+  (`refreshGroupMetadata` in `src/core/groups.ts`).
+
 ## Testing
 
 - `npm test` is the current gate (`tests/*.test.ts`, `node:test` via `tsx`).
