@@ -93,7 +93,10 @@ interface DispatchSpec<T> {
 export function registerTools(
   server: McpServer,
   getSock: () => WASocket | undefined,
-  config: WuConfig,
+  // A getter, not the config itself: this process outlives edits to
+  // config.yaml, and a tool that answered from a snapshot taken at startup
+  // would keep reporting a backend or an allowlist the user already changed.
+  getConfig: () => WuConfig,
   remote?: { name: string; remote: RemoteConfig },
 ): void {
   async function dispatch<T>(spec: DispatchSpec<T>): Promise<T> {
@@ -125,7 +128,7 @@ export function registerTools(
     ids: string[]
   ): Promise<{ results: unknown[]; errors: unknown[] }> {
     const sock = getSock();
-    if (sock) return downloadMediaBatch(ids, sock, config);
+    if (sock) return downloadMediaBatch(ids, sock, getConfig());
     if (await daemonIpcAvailable()) {
       return daemonRequest("media.downloadBatch", { msgIds: ids });
     }
@@ -167,7 +170,7 @@ export function registerTools(
     const summary = {} as Record<Capability, EnrichCapabilitySummary>;
 
     for (const capability of ["transcribe", "ocr"] as Capability[]) {
-      const status = resolveBackend(capability, config.enrich);
+      const status = resolveBackend(capability, getConfig().enrich);
       const targets = collectEnrichTargets(chatJid, capability, after, before);
 
       if (!status.available) {
@@ -183,7 +186,7 @@ export function registerTools(
       }
 
       const pool = await asyncPool(targets, ENRICH_CONCURRENCY, (msgId) =>
-        enrichMessage(capability, msgId, config)
+        enrichMessage(capability, msgId, getConfig())
       );
       summary[capability] = {
         backend: status.backend,
@@ -221,12 +224,12 @@ export function registerTools(
           local: async (sock) => {
             let sent;
             if (params.media_path) {
-              sent = await sendMedia(sock, params.to, params.media_path, config, {
+              sent = await sendMedia(sock, params.to, params.media_path, getConfig(), {
                 caption: params.caption || params.message,
                 replyTo: params.reply_to,
               });
             } else if (params.message) {
-              sent = await sendText(sock, params.to, params.message, config, {
+              sent = await sendText(sock, params.to, params.message, getConfig(), {
                 replyTo: params.reply_to,
               });
             } else {
@@ -277,7 +280,7 @@ export function registerTools(
       const sock = getSock();
       if (sock) {
         try {
-          await sendReaction(sock, params.chat, params.message_id, params.emoji, config);
+          await sendReaction(sock, params.chat, params.message_id, params.emoji, getConfig());
           return jsonResult({ success: true });
         } catch (err) {
           return errorResult((err as Error).message);
@@ -317,7 +320,7 @@ export function registerTools(
         args.push("--json");
 
         const result = await dispatch({
-          local: (sock) => downloadMedia(params.message_id, sock, config, params.out_dir),
+          local: (sock) => downloadMedia(params.message_id, sock, getConfig(), params.out_dir),
           // No local socket: route through a running daemon's socket if present.
           ipc: () => daemonRequest("media.download", { msgId: params.message_id, outDir: params.out_dir }),
           // Remote mode: download on the VPS (its daemon serves it), then pull the
@@ -353,7 +356,7 @@ export function registerTools(
             sock,
             params.name,
             params.participants,
-            config
+            getConfig()
           );
           return jsonResult({
             id: result.id,
@@ -394,7 +397,7 @@ export function registerTools(
       const sock = getSock();
       if (sock) {
         try {
-          await leaveGroup(sock, params.jid, config);
+          await leaveGroup(sock, params.jid, getConfig());
           return jsonResult({ success: true });
         } catch (err) {
           return errorResult((err as Error).message);
@@ -850,7 +853,7 @@ export function registerTools(
       const sock = getSock();
       if (sock) {
         try {
-          const code = await getInviteCode(sock, params.jid, config);
+          const code = await getInviteCode(sock, params.jid, getConfig());
           return jsonResult({ link: `https://chat.whatsapp.com/${code}` });
         } catch (err) {
           return errorResult((err as Error).message);
@@ -1043,7 +1046,7 @@ export function registerTools(
     async (params) => {
       try {
         const result = await dispatch({
-          local: (sock) => backfillHistory(sock, params.jid, params.count, config, {
+          local: (sock) => backfillHistory(sock, params.jid, params.count, getConfig(), {
             timeoutMs: params.timeout_ms,
           }),
           ipc: () => daemonRequest(
@@ -1112,7 +1115,7 @@ export function registerTools(
               if (ids.length === 0) return { results: [], errors: [], message: "No undownloaded media found" };
             }
 
-            const { results, errors } = await downloadMediaBatch(ids, sock, config, undefined, {
+            const { results, errors } = await downloadMediaBatch(ids, sock, getConfig(), undefined, {
               concurrency: params.concurrency,
             });
             return { results, errors };
@@ -1193,7 +1196,15 @@ export function registerTools(
     "Show which media-enrichment backends (transcription, OCR) are configured and ready, with exact steps to enable any that are off. Check this before transcribe/OCR.",
     {},
     async () => {
-      return jsonResult({ backends: enrichStatus(config.enrich) });
+      // Config is read live, but the environment is not: a key exported after
+      // this process started is invisible here while the CLI already sees it.
+      // Reporting the start time makes that disagreement self-explaining
+      // instead of a day of debugging.
+      const started_at = new Date(Date.now() - process.uptime() * 1000).toISOString();
+      return jsonResult({
+        backends: enrichStatus(getConfig().enrich),
+        server: { pid: process.pid, started_at },
+      });
     }
   );
 
@@ -1211,7 +1222,7 @@ export function registerTools(
         if (row && !resolveLocalMediaPath(row)) {
           try { await downloadMediaForManifest([params.message_id]); } catch { /* enrichMessage will report a clear error */ }
         }
-        const result = await enrichMessage("transcribe", params.message_id, config);
+        const result = await enrichMessage("transcribe", params.message_id, getConfig());
         return jsonResult(result);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -1232,7 +1243,7 @@ export function registerTools(
         if (row && !resolveLocalMediaPath(row)) {
           try { await downloadMediaForManifest([params.message_id]); } catch { /* enrichMessage will report a clear error */ }
         }
-        const result = await enrichMessage("ocr", params.message_id, config);
+        const result = await enrichMessage("ocr", params.message_id, getConfig());
         return jsonResult(result);
       } catch (err) {
         return errorResult((err as Error).message);
@@ -1252,7 +1263,7 @@ export function registerTools(
       const sock = getSock();
       if (sock) {
         try {
-          await renameGroup(sock, params.jid, params.name, config);
+          await renameGroup(sock, params.jid, params.name, getConfig());
           return jsonResult({ success: true, jid: params.jid, name: params.name });
         } catch (err) {
           return errorResult((err as Error).message);

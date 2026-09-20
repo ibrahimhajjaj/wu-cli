@@ -7,10 +7,11 @@ const require = createRequire(import.meta.url);
 const { version } = require("../../package.json");
 import type { WASocket } from "@whiskeysockets/baileys";
 import { createConnection, waitForConnection } from "../core/connection.js";
-import { startListener } from "../core/listener.js";
+import { startListener, type ListenerHandle } from "../core/listener.js";
 import { startDaemonIpc } from "../core/ipc.js";
 import { isLocked, acquireLock, releaseLock } from "../core/lock.js";
 import { loadConfig } from "../config/schema.js";
+import { watchConfig } from "../core/config-watch.js";
 import { DB_PATH } from "../config/paths.js";
 import { closeDb } from "../db/database.js";
 import { getDefaultRemote, checkRemoteHealth } from "../core/remote.js";
@@ -18,7 +19,10 @@ import { registerTools } from "./tools.js";
 import { registerResources } from "./resources.js";
 
 export async function startMcpServer(): Promise<void> {
-  const config = loadConfig();
+  // Live, not a snapshot: an MCP server is long-lived, and the file watcher
+  // below swaps in edits to config.yaml so tools stop answering from the
+  // config this process happened to boot with.
+  let config = loadConfig();
 
   const server = new McpServer({
     name: "wu-cli",
@@ -26,6 +30,7 @@ export async function startMcpServer(): Promise<void> {
   });
 
   let sock: WASocket | undefined;
+  let listener: ListenerHandle | undefined;
   let flushCreds: (() => Promise<void>) | undefined;
   let ownsConnection = false;
   let stopIpc: (() => void) | undefined;
@@ -71,19 +76,29 @@ export async function startMcpServer(): Promise<void> {
     await waitForConnection(sock);
 
     // Start listener for message collection
-    startListener(sock, { config, quiet: true });
+    listener = startListener(sock, { config, quiet: true });
 
     // Expose the socket over IPC so concurrent CLI media downloads reuse it.
     stopIpc = startDaemonIpc(getSock, () => config);
   }
 
   // Register tools and resources
-  registerTools(server, getSock, config, remoteForTools);
+  registerTools(server, getSock, () => config, remoteForTools);
   registerResources(server);
+
+  // Pick up config edits without a restart, the same way the daemon does. Note
+  // this covers the file only: environment variables (an API key exported after
+  // this process started) are fixed for the life of the process, which is why
+  // wu_enrich_status also reports when it started.
+  const stopConfigWatch = watchConfig((next) => {
+    config = next;
+    listener?.setConfig(next);
+  });
 
   // Graceful shutdown
   const shutdown = async () => {
     process.stderr.write("wu-mcp: Shutting down...\n");
+    stopConfigWatch();
     if (stopIpc) stopIpc();
     if (flushCreds) await flushCreds();
     if (sock) sock.end(undefined);

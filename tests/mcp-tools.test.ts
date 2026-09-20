@@ -87,7 +87,7 @@ describe("registerTools - registration", () => {
     const { sock } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     assert.equal(tools.size, toolCallSiteCount() - 1);
     assert.equal(tools.has("wu_sync_pull"), false);
@@ -101,7 +101,7 @@ describe("registerTools - registration", () => {
       remote: { host: "example.com", wu_home: "~/.wu" },
     };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config(), remote);
+    toolsMod.registerTools(server as any, () => sock, config, remote);
 
     assert.equal(tools.size, toolCallSiteCount());
     assert.equal(tools.has("wu_sync_pull"), true);
@@ -111,7 +111,7 @@ describe("registerTools - registration", () => {
     const { sock } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     assert.ok(tools.size > 0);
     for (const [name, tool] of tools) {
@@ -126,7 +126,7 @@ describe("registerTools - read-tool routing", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_chats_list");
     assert.ok(tool);
@@ -142,7 +142,7 @@ describe("registerTools - read-tool routing", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_messages_list");
     const result = await tool!.handler({ chat: "team@g.us", limit: 50 });
@@ -165,7 +165,7 @@ describe("registerTools - read-tool routing", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_messages_list");
@@ -186,7 +186,7 @@ describe("registerTools - write-tool validation", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_messages_send");
     const result = await tool!.handler({ to: "123@g.us" });
@@ -199,7 +199,7 @@ describe("registerTools - write-tool validation", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_media_download_batch");
     // concurrency: 0 is clamped to 1 by asyncPool, so the batch still runs
@@ -222,7 +222,7 @@ describe("registerTools - constraints round trip through the on-disk config", ()
     const { sock } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const setTool = tools.get("wu_constraints_default");
     const setResult = await setTool!.handler({ mode: "read" });
@@ -268,7 +268,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_constraints_list");
@@ -324,7 +324,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_constraints_list");
@@ -367,7 +367,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_groups_info");
@@ -411,7 +411,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_groups_info");
@@ -439,7 +439,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_groups_info");
@@ -476,7 +476,7 @@ describe("registerTools - visibility constraints", () => {
     });
     schema.saveConfig(cfg);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, cfg);
+    toolsMod.registerTools(server as any, () => sock, () => cfg);
 
     try {
       const tool = tools.get("wu_groups_info");

@@ -407,6 +407,8 @@ The local `cmd` runs with `{input}` replaced by the media path; it must either p
 
 `--condition_on_previous_text False` is in the default for a reason: left on, Whisper feeds each window its own previous output and can lock into repeating a single word for the rest of a long recording. It costs nothing to disable and it is the difference between a usable transcript and a page of one word.
 
+One process caveat: a long-running `wu mcp` picks up edits to `config.yaml` as they happen, but it cannot pick up a new environment variable. If you export an API key after starting it, the CLI will report the backend ready while the MCP tool still reports it missing - `wu_enrich_status` returns the process start time so the two disagreeing is easy to spot. Restart the MCP server after setting a key.
+
 All runtime data lives under `~/.wu/` (override with `WU_HOME` env var).
 
 ## JSON Output

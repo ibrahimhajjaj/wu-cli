@@ -48,7 +48,7 @@ describe("dispatch - local path", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_messages_send");
     const result = await tool!.handler({ to: "123@g.us", message: "hi" });
@@ -64,7 +64,7 @@ describe("dispatch - local path", () => {
     const { sock, calls } = makeFakeSocket();
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => sock, config());
+    toolsMod.registerTools(server as any, () => sock, config);
 
     const tool = tools.get("wu_media_download_batch");
     // No message_ids and no chat: the local branch resolves this itself and
@@ -81,7 +81,7 @@ describe("dispatch - no transport available", () => {
   it("wu_messages_send reports the generic 'not connected' error with no socket and no remote", async () => {
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => undefined, config());
+    toolsMod.registerTools(server as any, () => undefined, config);
 
     const tool = tools.get("wu_messages_send");
     const result = await tool!.handler({ to: "123@g.us", message: "hi" });
@@ -93,7 +93,7 @@ describe("dispatch - no transport available", () => {
   it("wu_media_download reports its own 'daemon or remote' wording with no socket, ipc, or remote", async () => {
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => undefined, config());
+    toolsMod.registerTools(server as any, () => undefined, config);
 
     const tool = tools.get("wu_media_download");
     const result = await tool!.handler({ message_id: "seed-1" });
@@ -108,7 +108,7 @@ describe("dispatch - no transport available", () => {
   it("wu_media_download_batch reports its own 'requires connection' wording with no socket, ipc, or remote", async () => {
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => undefined, config());
+    toolsMod.registerTools(server as any, () => undefined, config);
 
     const tool = tools.get("wu_media_download_batch");
     const result = await tool!.handler({ message_ids: ["seed-1"] });
@@ -123,7 +123,7 @@ describe("dispatch - no transport available", () => {
   it("wu_history_backfill reports the generic 'not connected' error with no socket and no remote", async () => {
     const { server, tools } = makeFakeMcp();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toolsMod.registerTools(server as any, () => undefined, config());
+    toolsMod.registerTools(server as any, () => undefined, config);
 
     const tool = tools.get("wu_history_backfill");
     const result = await tool!.handler({ jid: "123@g.us", count: 10, timeout_ms: 1000 });
