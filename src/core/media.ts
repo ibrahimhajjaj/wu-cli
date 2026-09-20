@@ -248,7 +248,7 @@ export async function enrichMessage(
     throw new Error(`Media for ${msgId} is not downloaded locally — download it first`);
   }
 
-  const text = await enrichFile(capability, file, config.enrich);
+  const text = await enrichFile(capability, file, config.enrich, row.chat_jid);
   const column = capability === "transcribe" ? "transcript" : "ocr_text";
   if (row.body) {
     withFtsRecovery(() =>

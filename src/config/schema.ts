@@ -60,7 +60,8 @@ export type RemoteConfig = z.infer<typeof RemoteConfig>;
 // free and offline once the binary is installed; the API path is opt-in.
 const EnrichLocal = z.object({
   // {input} is replaced with the media file path; the command must print the
-  // extracted text to stdout.
+  // extracted text to stdout. {lang} carries the capability's `language`, and
+  // when none is set both the placeholder and the flag holding it drop out.
   cmd: z.string(),
 });
 const EnrichApi = z.object({
@@ -74,13 +75,29 @@ const EnrichApi = z.object({
 });
 const EnrichCapability = z.object({
   backend: z.enum(["off", "local", "api"]).default("local"),
+  // The language spoken in the media, written the way the backend expects it
+  // ("ar", "en", tesseract's "ara+eng"). Substituted for {lang} in a local
+  // command and sent as the language field on the API path. Left unset, every
+  // backend guesses, and on a clip a few seconds long it guesses per window
+  // and can switch language mid-clip - so pinning this is worth more than the
+  // choice of model for anything that isn't English.
+  language: z.string().optional(),
+  // Per-chat overrides of the above, keyed exactly like constraints.chats: an
+  // exact JID, or `*@domain` for every chat on a domain. A language belongs to
+  // a conversation, not to an installation - one account carries Arabic voice
+  // notes in one group and English in the next, and a single global pin is
+  // wrong for whichever half it doesn't match.
+  languages: z.record(z.string(), z.string()).default({}),
   local: EnrichLocal,
   api: EnrichApi.optional(),
 });
 const EnrichConfig = z.object({
   transcribe: EnrichCapability.default({
     backend: "local",
-    local: { cmd: "whisper {input} --model base --output_format txt --output_dir {outdir}" },
+    // --condition_on_previous_text False costs nothing and stops Whisper
+    // collapsing into a repeated word for the rest of a long clip, which it
+    // does often enough to matter in an unattended pipeline.
+    local: { cmd: "whisper {input} --model small --language {lang} --condition_on_previous_text False --output_format txt --output_dir {outdir}" },
     api: { provider: "openai", base_url: "https://api.groq.com/openai/v1", key_env: "GROQ_API_KEY", model: "whisper-large-v3" },
   }),
   ocr: EnrichCapability.default({

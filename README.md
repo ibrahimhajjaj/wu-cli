@@ -165,6 +165,46 @@ wu enrich status
 
 Configure under `enrich` in `config.yaml` (see Configuration below).
 
+**Pin the language, per chat.** For anything that isn't English this is worth
+more than the choice of model. Without it Whisper guesses, it guesses again on
+every ~30s window, and on a voice note a few seconds long it can land on the
+wrong language or switch part way through.
+
+A single global pin is the wrong shape for most accounts, because the language
+belongs to the conversation, not to the install: one group carries Arabic voice
+notes and the next carries English, and whichever one you pin globally makes the
+other worse. So `languages` is keyed exactly like `constraints.chats` - an exact
+JID, or `*@domain` for a whole domain - with `language` as the fallback for
+everything it doesn't cover:
+
+```yaml
+enrich:
+  transcribe:
+    language: en                        # fallback; omit it to keep auto-detect
+    languages:
+      "120363XXX@g.us": ar              # this group is Arabic
+      "*@s.whatsapp.net": ar            # every DM is Arabic
+```
+
+Exact JID wins over the wildcard, which wins over `language`. The resolved value
+fills `{lang}` in a local command and is sent as the `language` field on the API
+path. `wu enrich status` says which language each backend will use, how many
+chats are pinned, and says so when it is still guessing.
+
+**Choosing a transcription backend.** The shipped default is `whisper --model
+small`, which is the strongest model that is still a reasonable first-run
+download (~460 MB) and runs anywhere. Worth knowing before you keep it:
+
+- A hosted `whisper-large-v3` (`backend: api`) is both the most accurate option
+  and, on a machine without a fast GPU, far and away the quickest - tens of times
+  realtime against roughly realtime for a local CPU run.
+- `--model turbo` is much faster than `large-v3` locally, but its decoder is cut
+  from 32 layers to 4 and the loss falls hardest on under-represented dialects.
+  Don't reach for it as a quality upgrade.
+- On Apple Silicon, `mlx_whisper` runs `large-v3` several times faster than the
+  reference implementation. Its flags are hyphenated (`--condition-on-previous-text`)
+  where `whisper`'s are underscored, so port the command rather than copying it.
+
 ### History
 
 | Command | Description |
@@ -342,8 +382,11 @@ log:
 enrich:                    # Media enrichment backends (off until configured)
   transcribe:
     backend: local         # local | api | off
+    language: ar           # optional fallback; fills {lang} below and the API language field
+    languages:             # optional per-chat overrides, keyed like constraints.chats
+      "120363XXX@g.us": ar
     local:
-      cmd: "whisper {input} --model base --output_format txt --output_dir {outdir}"
+      cmd: "whisper {input} --model small --language {lang} --condition_on_previous_text False --output_format txt --output_dir {outdir}"
     api:                   # used when backend: api
       provider: openai     # OpenAI-compatible audio (Groq, OpenAI, ...)
       base_url: https://api.groq.com/openai/v1
@@ -360,7 +403,9 @@ enrich:                    # Media enrichment backends (off until configured)
       model: claude-haiku-4-5-20251001
 ```
 
-The local `cmd` runs with `{input}` replaced by the media path; it must either print the text to stdout (e.g. tesseract) or write a `.txt` into `{outdir}` (e.g. whisper). Run `wu enrich status` to see what's detected and how to enable each backend.
+The local `cmd` runs with `{input}` replaced by the media path; it must either print the text to stdout (e.g. tesseract) or write a `.txt` into `{outdir}` (e.g. whisper). `{lang}` takes the language resolved for the chat the media came from, and when nothing is pinned the placeholder and the flag holding it both drop out of the command, since a bare `--language` is an error. Run `wu enrich status` to see what's detected and how to enable each backend.
+
+`--condition_on_previous_text False` is in the default for a reason: left on, Whisper feeds each window its own previous output and can lock into repeating a single word for the rest of a long recording. It costs nothing to disable and it is the difference between a usable transcript and a page of one word.
 
 All runtime data lives under `~/.wu/` (override with `WU_HOME` env var).
 

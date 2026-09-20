@@ -18,6 +18,18 @@ describe("WuConfigSchema", () => {
     assert.equal(config.constraints, undefined);
   });
 
+  it("ships a transcribe default carrying the model, the language slot and the loop guard", () => {
+    const cmd = WuConfigSchema.parse({}).enrich.transcribe.local.cmd;
+    // Whisper's own default is turbo, whose cut-down decoder is worst on the
+    // dialects this tool sees most; base is weaker still. small is the floor
+    // that stays a reasonable first-run download.
+    assert.match(cmd, /--model small\b/);
+    // Flags are underscore-separated in the openai-whisper CLI; the hyphenated
+    // spelling is mlx_whisper's and argparse rejects it outright.
+    assert.match(cmd, /--condition_on_previous_text False\b/);
+    assert.match(cmd, /--language \{lang\}/);
+  });
+
   it("should parse full config", () => {
     const config = WuConfigSchema.parse({
       whatsapp: {

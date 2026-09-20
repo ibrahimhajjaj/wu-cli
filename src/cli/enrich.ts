@@ -27,6 +27,9 @@ export function registerEnrichCommand(program: Command): void {
         if (!r.available && r.enable_hint) {
           console.log(`            enable: ${r.enable_hint}`);
         }
+        if (r.note) {
+          console.log(`            note: ${r.note}`);
+        }
       }
     });
 }

@@ -13,6 +13,9 @@ export interface BackendStatus {
   available: boolean;
   detail: string;
   enable_hint: string;
+  // Set when the backend works but is configured in a way that quietly costs
+  // accuracy, so `wu enrich status` can say so instead of looking healthy.
+  note?: string;
 }
 
 function binOnPath(bin: string): boolean {
@@ -24,6 +27,50 @@ function binOnPath(bin: string): boolean {
 // The binary a local command would invoke (first token of the template).
 function localBin(cap: EnrichCapabilityConfig): string {
   return cap.local.cmd.trim().split(/\s+/)[0] || "";
+}
+
+// A language flag written into the command itself, which is how it had to be
+// done before `language` existed. Tested against the rendered command, so the
+// shipped "--language {lang}" doesn't count itself as pinned once the empty
+// placeholder has dropped out.
+const CMD_NAMES_LANGUAGE = /(?:^|\s)(?:--?lang(?:uage)?|-l)(?:[=\s]|$)/;
+
+function localNamesLanguage(c: EnrichCapabilityConfig): boolean {
+  return c.backend === "local" && CMD_NAMES_LANGUAGE.test(applyLanguage(c.local.cmd, c.language));
+}
+
+// Which language to pin for one chat. Same three tiers as the constraint model
+// - exact JID, then a `*@domain` wildcard, then the capability's own default -
+// so the two maps are written and read the same way.
+export function resolveLanguage(c: EnrichCapabilityConfig, chatJid?: string): string | undefined {
+  if (chatJid) {
+    const exact = c.languages[chatJid];
+    if (exact) return exact;
+    const domain = chatJid.includes("@") ? chatJid.slice(chatJid.indexOf("@")) : "";
+    const wildcard = c.languages[`*${domain}`];
+    if (wildcard) return wildcard;
+  }
+  return c.language;
+}
+
+// What the resolved backend will do about language, for `wu enrich status`.
+// Chat-level pins can't be resolved without a chat, so they're counted.
+function languageDetail(c: EnrichCapabilityConfig): string {
+  const pinned = Object.keys(c.languages).length;
+  const perChat = pinned ? `, ${pinned} chat${pinned === 1 ? "" : "s"} pinned` : "";
+  if (c.language) return ` (language ${c.language}${perChat})`;
+  if (localNamesLanguage(c)) return ` (language set in cmd${perChat})`;
+  return ` (language auto-detected${perChat})`;
+}
+
+// Transcription is where guessing quietly costs accuracy: a voice note is
+// short, the model re-guesses on every window and can switch language part way
+// through, and the operator is the one who knows what was spoken. OCR has no
+// equivalent trap, so it gets no nag.
+function languageNote(cap: Capability, c: EnrichCapabilityConfig): string | undefined {
+  if (cap !== "transcribe" || c.language || localNamesLanguage(c)) return undefined;
+  if (Object.keys(c.languages).length > 0) return undefined;
+  return "language is auto-detected per clip - pin it under enrich.transcribe.languages per chat, or enrich.transcribe.language for all";
 }
 
 function installHint(cap: Capability, bin: string): string {
@@ -46,6 +93,7 @@ export function resolveBackend(cap: Capability, config: EnrichConfig): BackendSt
       enable_hint: `set enrich.${cap}.backend to 'local' or 'api'`,
     };
   }
+  const note = languageNote(cap, c);
   if (c.backend === "local") {
     const bin = localBin(c);
     const ok = binOnPath(bin);
@@ -53,8 +101,9 @@ export function resolveBackend(cap: Capability, config: EnrichConfig): BackendSt
       capability: cap,
       backend: "local",
       available: ok,
-      detail: ok ? `local: ${bin}` : `local backend '${bin}' not found on PATH`,
+      detail: ok ? `local: ${bin}${languageDetail(c)}` : `local backend '${bin}' not found on PATH`,
       enable_hint: ok ? "" : installHint(cap, bin),
+      ...(note ? { note } : {}),
     };
   }
   // api
@@ -65,8 +114,9 @@ export function resolveBackend(cap: Capability, config: EnrichConfig): BackendSt
     capability: cap,
     backend: "api",
     available: ok,
-    detail: ok ? `api: ${api!.model}` : !api ? "no api config" : `${api.key_env} not set`,
+    detail: ok ? `api: ${api!.model}${languageDetail(c)}` : !api ? "no api config" : `${api.key_env} not set`,
     enable_hint: ok ? "" : api ? `export ${api.key_env}=...` : `configure enrich.${cap}.api`,
+    ...(note ? { note } : {}),
   };
 }
 
@@ -83,14 +133,24 @@ export class EnrichUnavailableError extends Error {
   }
 }
 
+// Substitute the language pin. A command that names a flag for it
+// ("--language {lang}") has to lose the whole flag when nothing is pinned:
+// whisper and tesseract both reject the flag with an empty value, and neither
+// has a "detect" value to pass in its place. Substituting before {input} keeps
+// a media path that happens to contain the placeholder out of the command.
+function applyLanguage(cmd: string, language?: string): string {
+  if (language) return cmd.replace(/\{lang\}/g, shellEscape(language));
+  return cmd.replace(/(?:^|[ \t]+)(?:-{1,2}[A-Za-z0-9][\w-]*[= \t]*)?\{lang\}/g, "");
+}
+
 // Run the configured local command, substituting {input}. Two output styles:
 //   - stdout: the command prints the text (e.g. tesseract ... stdout)
 //   - {outdir}: the command writes a .txt into a temp dir we provide (e.g.
 //     whisper --output_dir {outdir}); we read it back
-function runLocal(cmdTemplate: string, inputPath: string): string {
+function runLocal(cmdTemplate: string, inputPath: string, language?: string): string {
   const usesOutdir = cmdTemplate.includes("{outdir}");
   let outdir: string | undefined;
-  let cmd = cmdTemplate.replace(/\{input\}/g, shellEscape(inputPath));
+  let cmd = applyLanguage(cmdTemplate, language).replace(/\{input\}/g, shellEscape(inputPath));
   if (usesOutdir) {
     outdir = mkdtempSync(join(tmpdir(), "wu-enrich-"));
     cmd = cmd.replace(/\{outdir\}/g, shellEscape(outdir));
@@ -130,13 +190,18 @@ const AUDIO_MIME: Record<string, string> = {
 };
 
 // OpenAI-compatible audio transcription (Groq, OpenAI, ...).
-async function transcribeViaApi(file: string, api: NonNullable<EnrichCapabilityConfig["api"]>): Promise<string> {
+async function transcribeViaApi(
+  file: string,
+  api: NonNullable<EnrichCapabilityConfig["api"]>,
+  language?: string
+): Promise<string> {
   const key = process.env[api.key_env]!;
   const ext = (basename(file).match(/\.[^.]+$/)?.[0] || "").toLowerCase();
   const blob = new Blob([readFileSync(file)], { type: AUDIO_MIME[ext] || "application/octet-stream" });
   const form = new FormData();
   form.append("file", blob, basename(file));
   form.append("model", api.model);
+  if (language) form.append("language", language);
   const res = await fetch(`${api.base_url.replace(/\/$/, "")}/audio/transcriptions`, {
     method: "POST",
     headers: { authorization: `Bearer ${key}` },
@@ -223,13 +288,21 @@ async function ocrViaAnthropic(file: string, api: NonNullable<EnrichCapabilityCo
   return (json.content?.map((c) => c.text || "").join("") || "").trim();
 }
 
-// Extract text from a media file using the configured backend for `cap`.
-export async function enrichFile(cap: Capability, file: string, config: EnrichConfig): Promise<string> {
+// Extract text from a media file using the configured backend for `cap`. The
+// chat the media came from picks the language; without one only the global
+// default applies.
+export async function enrichFile(
+  cap: Capability,
+  file: string,
+  config: EnrichConfig,
+  chatJid?: string
+): Promise<string> {
   const status = resolveBackend(cap, config);
   if (!status.available) throw new EnrichUnavailableError(status);
 
   const c = config[cap];
-  if (c.backend === "local") return runLocal(c.local.cmd, file);
-  if (cap === "transcribe") return transcribeViaApi(file, c.api!);
+  const language = resolveLanguage(c, chatJid);
+  if (c.backend === "local") return runLocal(c.local.cmd, file, language);
+  if (cap === "transcribe") return transcribeViaApi(file, c.api!, language);
   return ocrViaApi(file, c.api!);
 }
