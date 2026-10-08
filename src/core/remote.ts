@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "child_process";
-import { existsSync, renameSync, unlinkSync, statSync, mkdirSync } from "fs";
+import { existsSync, renameSync, unlinkSync, statSync, mkdirSync, copyFileSync } from "fs";
 import { join } from "path";
 import type { WuConfig, RemoteConfig } from "../config/schema.js";
 import { WU_HOME, NO_PROPAGATE_ENV } from "../config/paths.js";
@@ -150,6 +150,10 @@ export async function syncMedia(
 
 // --- DB sync ---
 
+// Generous on purpose: the first pull, or one after a long gap, moves the whole
+// store, and a run that is killed partway leaves the caller with nothing.
+const DB_RSYNC_TIMEOUT_MS = 600_000;
+
 export async function syncDb(
   remote: RemoteConfig,
   localDbPath: string,
@@ -186,47 +190,62 @@ export async function syncDb(
 
   // Path 2: backup + rsync (fallback)
   const tmpRemote = `/tmp/wu-sync-${Date.now()}.db`;
-
-  // Remote backup (use remotePath for tilde expansion)
-  const backup = await sshRawExec(
-    remote,
-    `sqlite3 ${remotePath(remote.wu_home + "/wu.db")} '.backup ${shellEscape(tmpRemote)}'`,
-  );
-  if (backup.exitCode !== 0) {
-    throw new Error(`Remote backup failed: ${backup.stderr}`);
-  }
-
-  // Rsync to local temp file
   const tmpLocal = localDbPath + ".tmp";
-  const sshCmd = `ssh ${sshControlArgs().join(" ")}`;
 
-  await new Promise<void>((resolve, reject) => {
-    execFile(
-      "rsync",
-      ["-az", "-e", sshCmd, `${remote.host}:${tmpRemote}`, tmpLocal],
-      { timeout: 120_000 },
-      (err) => {
-        if (err) reject(new Error(`rsync failed: ${(err as Error).message}`));
-        else resolve();
-      },
-    );
-  });
-
-  // Close any open local handle before swapping the file so an in-process
-  // reader (daemon / long-lived MCP server) can't see a half-swapped DB.
-  closeDb();
   try {
-    // Atomic local write
-    for (const suffix of ["-wal", "-shm"]) {
-      try { unlinkSync(localDbPath + suffix); } catch {}
+    // The snapshot is a full copy of the message store, so it gets the same
+    // owner-only mode as the store itself.
+    const backup = await sshRawExec(
+      remote,
+      `umask 077 && sqlite3 ${remotePath(remote.wu_home + "/wu.db")} '.backup ${shellEscape(tmpRemote)}'`,
+    );
+    if (backup.exitCode !== 0) {
+      throw new Error(`Remote backup failed: ${backup.stderr}`);
     }
-    renameSync(tmpLocal, localDbPath);
-  } finally {
-    reloadDb();
-  }
 
-  // Clean up remote temp
-  await sshRawExec(remote, `rm -f ${shellEscape(tmpRemote)}`);
+    // Start the local temp from the copy we already have: rsync then sends only
+    // the pages that changed since the last pull instead of the whole database,
+    // which is what kept a slow link under the timeout. A stale or torn basis is
+    // harmless, rsync checksums every block it reuses.
+    if (existsSync(localDbPath)) {
+      try { copyFileSync(localDbPath, tmpLocal); } catch { /* full transfer then */ }
+    }
+
+    const sshCmd = `ssh ${sshControlArgs().join(" ")}`;
+    await new Promise<void>((resolve, reject) => {
+      execFile(
+        "rsync",
+        ["-az", "-e", sshCmd, `${remote.host}:${tmpRemote}`, tmpLocal],
+        { timeout: DB_RSYNC_TIMEOUT_MS },
+        (err, _stdout, stderr) => {
+          if (!err) return resolve();
+          const e = err as Error & { killed?: boolean; signal?: string | null };
+          const why = e.killed || e.signal
+            ? `killed after ${DB_RSYNC_TIMEOUT_MS / 1000}s${e.signal ? ` (${e.signal})` : ""}, the transfer needed longer than the timeout allowed`
+            : (stderr || "").trim() || e.message;
+          reject(new Error(`rsync failed: ${why}`));
+        },
+      );
+    });
+
+    // Close any open local handle before swapping the file so an in-process
+    // reader (daemon / long-lived MCP server) can't see a half-swapped DB.
+    closeDb();
+    try {
+      // Atomic local write
+      for (const suffix of ["-wal", "-shm"]) {
+        try { unlinkSync(localDbPath + suffix); } catch {}
+      }
+      renameSync(tmpLocal, localDbPath);
+    } finally {
+      reloadDb();
+    }
+  } finally {
+    try { unlinkSync(tmpLocal); } catch { /* renamed into place, or never made */ }
+    // Clean up remote temp, also when the transfer failed, or every failed
+    // pull leaves a full copy of the store behind on the box.
+    await sshRawExec(remote, `rm -f ${shellEscape(tmpRemote)}`).catch(() => {});
+  }
 
   return { method: "backup+rsync" };
 }
