@@ -62,7 +62,7 @@ describe("daemon IPC transport", () => {
   it("rejects unknown methods", async () => {
     await assert.rejects(
       () => ipc.daemonRequest("does.not.exist", {}, 5000, SOCK),
-      /Unknown IPC method/
+      /predates `does.not.exist`/
     );
   });
 
@@ -211,5 +211,147 @@ describe("daemon IPC client close handling", () => {
     );
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 5000, `expected fast rejection, took ${elapsed}ms`);
+  });
+});
+
+// Sends, reactions, deletes and group changes ride the daemon's socket. A
+// one-shot login for them replaces the daemon's session (440), and the daemon's
+// reconnect then knocks the one-shot off mid-send, so the message goes out and
+// the caller still sees "connection closed".
+describe("daemon IPC socket actions", () => {
+  const ACT_SOCK = join(tmpdir(), `wu-ipc-act-${process.pid}.sock`);
+  let stopAct: () => void;
+  let fake: import("./helpers/fake-socket.js").FakeSocket;
+  let schema: typeof import("../src/config/schema.js");
+
+  before(async () => {
+    const { makeFakeSocket } = await import("./helpers/fake-socket.js");
+    schema = await import("../src/config/schema.js");
+    database.getDb();
+    fake = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({
+      constraints: { default: "full" },
+      whatsapp: { send_delay_ms: 0 },
+    });
+    stopAct = ipc.startDaemonIpc(() => fake.sock, () => config, ACT_SOCK);
+  });
+
+  after(() => {
+    if (stopAct) stopAct();
+    try { if (existsSync(ACT_SOCK)) unlinkSync(ACT_SOCK); } catch { /* best effort */ }
+  });
+
+  it("sends on the daemon's socket and returns a plain id and timestamp", async () => {
+    fake.calls.length = 0;
+    const res = await ipc.runAction<{ id: string; timestamp: number }>(
+      "messages.send",
+      { to: "team@g.us", text: "hello" },
+      {} as WuConfig,
+      { sockPath: ACT_SOCK }
+    );
+    assert.deepEqual(res, { id: "fake-msg-id", timestamp: 1700000000 });
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(fake.calls[0]!.args.slice(0, 2), ["team@g.us", { text: "hello" }]);
+  });
+
+  it("revokes on the daemon's socket", async () => {
+    fake.calls.length = 0;
+    const res = await ipc.runAction<{ id: string }>(
+      "messages.delete",
+      { jid: "team@g.us", msgId: "m-1" },
+      {} as WuConfig,
+      { sockPath: ACT_SOCK }
+    );
+    assert.equal(res.id, "m-1");
+    assert.deepEqual(fake.calls[0]!.args[1], {
+      delete: { remoteJid: "team@g.us", id: "m-1", fromMe: false },
+    });
+  });
+
+  it("keeps the send validation on the daemon side", async () => {
+    await assert.rejects(
+      () => ipc.runAction("messages.send", { to: "team@g.us" }, {} as WuConfig, { sockPath: ACT_SOCK }),
+      /Provide text, media, or a poll/
+    );
+    await assert.rejects(
+      () => ipc.runAction(
+        "messages.send",
+        { to: "team@g.us", poll: "Q?", options: ["only one"] },
+        {} as WuConfig,
+        { sockPath: ACT_SOCK }
+      ),
+      /at least 2 options/
+    );
+  });
+
+  it("keeps the constraint exit code when the daemon refuses", async () => {
+    const schema = await import("../src/config/schema.js");
+    const BLOCK_SOCK = join(tmpdir(), `wu-ipc-blk-${process.pid}.sock`);
+    const blocked = schema.WuConfigSchema.parse({ constraints: { default: "none" } });
+    const stopBlk = ipc.startDaemonIpc(() => fake.sock, () => blocked, BLOCK_SOCK);
+    try {
+      await assert.rejects(
+        () => ipc.runAction("messages.send", { to: "team@g.us", text: "x" }, {} as WuConfig, { sockPath: BLOCK_SOCK }),
+        (err: Error & { exitCode?: number }) => err.exitCode === 2
+      );
+    } finally {
+      stopBlk();
+    }
+  });
+
+  it("tells the caller to restart a daemon that predates the method", async () => {
+    // An old daemon still listening: it answers, but not this method.
+    const OLD_SOCK = join(tmpdir(), `wu-ipc-old-${process.pid}.sock`);
+    const old: Server = createServer((conn) => {
+      conn.on("data", (chunk) => {
+        const req = JSON.parse(chunk.toString().trim());
+        conn.write(JSON.stringify({ id: req.id, ok: false, error: `Unknown IPC method: ${req.method}` }) + "\n");
+      });
+    });
+    await new Promise<void>((r) => old.listen(OLD_SOCK, r));
+    try {
+      await assert.rejects(
+        () => ipc.runAction("messages.send", { to: "team@g.us", text: "x" }, {} as WuConfig, { sockPath: OLD_SOCK }),
+        /predates `messages.send`.*Restart it/
+      );
+    } finally {
+      old.close();
+      try { if (existsSync(OLD_SOCK)) unlinkSync(OLD_SOCK); } catch { /* best effort */ }
+    }
+  });
+});
+
+describe("daemon IPC delete of a message missing from the store", () => {
+  const DEL_SOCK = join(tmpdir(), `wu-ipc-del-${process.pid}.sock`);
+  let stopDel: () => void;
+  let fake: import("./helpers/fake-socket.js").FakeSocket;
+
+  before(async () => {
+    const { makeFakeSocket } = await import("./helpers/fake-socket.js");
+    const schema = await import("../src/config/schema.js");
+    database.getDb();
+    fake = makeFakeSocket();
+    const config = schema.WuConfigSchema.parse({
+      constraints: { default: "full" },
+      whatsapp: { send_delay_ms: 0 },
+    });
+    stopDel = ipc.startDaemonIpc(() => fake.sock, () => config, DEL_SOCK);
+  });
+
+  after(() => {
+    if (stopDel) stopDel();
+    try { if (existsSync(DEL_SOCK)) unlinkSync(DEL_SOCK); } catch { /* best effort */ }
+  });
+
+  it("revokes as our own message when the caller says so", async () => {
+    await ipc.runAction(
+      "messages.delete",
+      { jid: "team@g.us", msgId: "never-stored", fromMe: true },
+      {} as WuConfig,
+      { sockPath: DEL_SOCK }
+    );
+    assert.deepEqual(fake.calls[0]!.args[1], {
+      delete: { remoteJid: "team@g.us", id: "never-stored", fromMe: true },
+    });
   });
 });

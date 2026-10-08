@@ -2,8 +2,8 @@ import { Command } from "commander";
 import { withConnection } from "../core/connection.js";
 import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage } from "../core/media.js";
 import { EnrichUnavailableError } from "../core/enrich.js";
-import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
-import { sendMedia } from "../core/sender.js";
+import { daemonIpcAvailable, daemonRequest, runAction } from "../core/ipc.js";
+import { absoluteMediaPath, type SendResult } from "../core/actions.js";
 import { loadConfig } from "../config/schema.js";
 import { getDb } from "../db/database.js";
 import { outputResult } from "./format.js";
@@ -78,21 +78,16 @@ export function registerMediaCommand(program: Command): void {
       ) => {
         const config = loadConfig();
         try {
-          await withConnection(async (sock) => {
-            const result = await sendMedia(sock, jid, filePath, config, {
-              caption: opts.caption,
-            });
-            if (opts.json) {
-              console.log(
-                JSON.stringify({
-                  id: result?.key?.id,
-                  timestamp: result?.messageTimestamp,
-                })
-              );
-            } else {
-              console.log(`Sent: ${result?.key?.id}`);
-            }
-          });
+          const result = await runAction<SendResult>(
+            "messages.send",
+            { to: jid, media: absoluteMediaPath(filePath), caption: opts.caption },
+            config
+          );
+          if (opts.json) {
+            console.log(JSON.stringify(result));
+          } else {
+            console.log(`Sent: ${result.id}`);
+          }
         } catch (err) {
           const error = err as Error & { exitCode?: number };
           console.error(error.message);

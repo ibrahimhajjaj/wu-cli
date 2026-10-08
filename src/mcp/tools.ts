@@ -8,7 +8,8 @@ import { existsSync, unlinkSync } from "fs";
 import { resolve, sep, isAbsolute } from "path";
 import { DB_PATH, EXPORTS_DIR } from "../config/paths.js";
 import { closeDb, reloadDb } from "../db/database.js";
-import { sendText, sendMedia, sendReaction } from "../core/sender.js";
+import { sendReaction } from "../core/sender.js";
+import { sendAction, absoluteMediaPath, type SendParams, type SendResult } from "../core/actions.js";
 import { downloadMedia, downloadMediaBatch, pruneMedia, parseDuration, enrichMessage, resolveLocalMediaPath } from "../core/media.js";
 import { enrichStatus, resolveBackend, type Capability } from "../core/enrich.js";
 import { asyncPool } from "../core/pool.js";
@@ -220,23 +221,19 @@ export function registerTools(
         if (params.reply_to) args.push("--reply-to", params.reply_to);
         args.push("--json");
 
-        const result = await dispatch<{ id: unknown; timestamp: unknown }>({
-          local: async (sock) => {
-            let sent;
-            if (params.media_path) {
-              sent = await sendMedia(sock, params.to, params.media_path, getConfig(), {
-                caption: params.caption || params.message,
-                replyTo: params.reply_to,
-              });
-            } else if (params.message) {
-              sent = await sendText(sock, params.to, params.message, getConfig(), {
-                replyTo: params.reply_to,
-              });
-            } else {
-              throw new Error("Provide message or media_path");
-            }
-            return { id: sent?.key?.id, timestamp: sent?.messageTimestamp };
-          },
+        if (!params.message && !params.media_path) throw new Error("Provide message or media_path");
+        const sendParams: SendParams = {
+          to: params.to,
+          text: params.message,
+          media: absoluteMediaPath(params.media_path),
+          caption: params.caption,
+          replyTo: params.reply_to,
+        };
+
+        const result = await dispatch<SendResult>({
+          local: (sock) => sendAction(sock, getConfig(), sendParams),
+          // A daemon on this machine owns the session; send on its socket.
+          ipc: () => daemonRequest<SendResult>("messages.send", { ...sendParams }),
           remoteArgs: args,
           remoteErrorPrefix: "Remote send failed",
           afterRemote: (sent) => {
@@ -282,6 +279,14 @@ export function registerTools(
         try {
           await sendReaction(sock, params.chat, params.message_id, params.emoji, getConfig());
           return jsonResult({ success: true });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("messages.react", { jid: params.chat, msgId: params.message_id, emoji: params.emoji }));
         } catch (err) {
           return errorResult((err as Error).message);
         }
@@ -368,6 +373,14 @@ export function registerTools(
         }
       }
 
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("groups.create", { name: params.name, participants: params.participants }));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
       if (remote) {
         try {
           const sshResult = await sshWuExec(remote.remote, [
@@ -398,7 +411,15 @@ export function registerTools(
       if (sock) {
         try {
           await leaveGroup(sock, params.jid, getConfig());
-          return jsonResult({ success: true });
+          return jsonResult({ success: true, jid: params.jid });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("groups.leave", { jid: params.jid }));
         } catch (err) {
           return errorResult((err as Error).message);
         }
@@ -860,6 +881,14 @@ export function registerTools(
         }
       }
 
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("groups.invite", { jid: params.jid }));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
       if (remote) {
         try {
           const sshResult = await sshWuExec(remote.remote, [
@@ -1270,6 +1299,14 @@ export function registerTools(
         }
       }
 
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("groups.rename", { jid: params.jid, name: params.name }));
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
       if (remote) {
         try {
           const sshResult = await sshWuExec(remote.remote, [
@@ -1301,6 +1338,14 @@ export function registerTools(
         try {
           const jid = await joinGroupByInvite(sock, params.code);
           return jsonResult({ success: true, jid });
+        } catch (err) {
+          return errorResult((err as Error).message);
+        }
+      }
+
+      if (await daemonIpcAvailable()) {
+        try {
+          return jsonResult(await daemonRequest("groups.join", { code: params.code }));
         } catch (err) {
           return errorResult((err as Error).message);
         }

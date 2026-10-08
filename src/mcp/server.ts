@@ -45,8 +45,8 @@ export async function startMcpServer(): Promise<void> {
   let remoteForTools: { name: string; remote: import("../config/schema.js").RemoteConfig } | undefined;
 
   if (locked) {
-    // Mode 1: daemon running locally — read-only from SQLite (existing behavior)
-    process.stderr.write("wu-mcp: Daemon is running, starting in read-only mode (queries only, no sending)\n");
+    // Mode 1: daemon running locally — reads from SQLite, writes over daemon IPC
+    process.stderr.write("wu-mcp: Daemon is running, reading from SQLite and sending through the daemon\n");
   } else if (defaultRemote && hasLocalDb) {
     // Mode 3: remote mode — reads local, writes via SSH
     remoteForTools = defaultRemote;

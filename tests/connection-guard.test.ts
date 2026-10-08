@@ -23,7 +23,7 @@ describe("withConnection lock guard", () => {
     try { rmSync(wuHome, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
-  it("refuses an exclusive connection while another process holds the lock", async () => {
+  it("refuses a one-shot login while another process holds the lock", async () => {
     // Simulate a different live process holding the lock: the guard ignores our
     // own pid so a lock-owning process is never blocked by itself.
     writeFileSync(LOCK_PATH, String(otherPid));
@@ -35,8 +35,7 @@ describe("withConnection lock guard", () => {
             async () => {
               ran = true;
               return null;
-            },
-            { requireExclusive: true }
+            }
           ),
         /holds the WhatsApp session/
       );
@@ -51,7 +50,7 @@ describe("withConnection lock guard", () => {
   it("carries the connection-failed exit code", async () => {
     writeFileSync(LOCK_PATH, String(otherPid));
     try {
-      await withConnection(async (_sock: WASocket) => null, { requireExclusive: true });
+      await withConnection(async (_sock: WASocket) => null);
       assert.fail("expected withConnection to throw");
     } catch (err) {
       assert.equal((err as { exitCode?: number }).exitCode, 4);
@@ -60,19 +59,13 @@ describe("withConnection lock guard", () => {
     }
   });
 
-  it("leaves unguarded callers alone so commands with no daemon route still work", async () => {
-    // `messages send` and group management have no IPC equivalent - notably the
-    // remote write path SSHes them onto the box where the daemon holds the lock -
-    // so they must not be refused here. Reaching createConnection (and failing on
-    // credentials in this sandbox) proves the guard did not short-circuit.
-    writeFileSync(LOCK_PATH, String(otherPid));
-    try {
-      await assert.rejects(
-        () => withConnection(async () => null),
-        (err: Error) => !/holds the WhatsApp session/.test(err.message)
-      );
-    } finally {
-      try { unlinkSync(LOCK_PATH); } catch { /* best effort */ }
-    }
+  it("lets a login through when no other process holds the lock", async () => {
+    // Reaching createConnection (and failing on credentials in this sandbox)
+    // proves the guard did not short-circuit.
+    try { unlinkSync(LOCK_PATH); } catch { /* not there */ }
+    await assert.rejects(
+      () => withConnection(async () => null),
+      (err: Error) => !/holds the WhatsApp session/.test(err.message)
+    );
   });
 });

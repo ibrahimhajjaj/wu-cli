@@ -198,30 +198,24 @@ export async function waitForConnection(
 
 export async function withConnection<T>(
   fn: (sock: WASocket) => Promise<T>,
-  opts?: { quiet?: boolean; requireExclusive?: boolean }
+  opts?: { quiet?: boolean }
 ): Promise<T> {
-  // Two sockets on one account make WhatsApp treat them as rivals, and both
-  // processes write the same auth files on the way out, so a second login while
-  // another process holds the session can cost the pairing.
-  //
-  // `requireExclusive` is for callers that have a daemon route to fall back on
-  // (they try IPC first and only land here when nothing answered). Refusing is
-  // then strictly better than racing, and it also covers the case where the lock
-  // holder serves no IPC at all - `wu listen`. Callers with no alternative are
-  // left unguarded on purpose: a command that cannot be served any other way
-  // should not be turned into a hard failure. Processes that legitimately own
-  // the session take the lock and call createConnection directly.
-  if (opts?.requireExclusive) {
-    const held = isLocked();
-    if (held.locked && held.pid !== process.pid) {
-      const err = new Error(
-        `Another wu process (PID ${held.pid}) holds the WhatsApp session and is not serving requests over IPC. Stop it, or run \`wu daemon\`, which handles this on its existing connection.`
-      );
-      // 4 = connection failed, matching what the lock-failure paths in `listen`
-      // and `daemon` exit with (see cli/exit-codes.ts; core does not import cli).
-      (err as Error & { exitCode: number }).exitCode = 4;
-      throw err;
-    }
+  // Two sockets on one account make WhatsApp treat them as rivals: the new
+  // login replaces the daemon's (440), the daemon reconnects and replaces it
+  // back, and both processes write the same auth files on the way out. Every
+  // caller tries the daemon over IPC first and only lands here when nothing
+  // answered, so refusing is strictly better than racing. It also covers a lock
+  // holder that serves no IPC at all - `wu listen`. Processes that legitimately
+  // own the session take the lock and call createConnection directly.
+  const held = isLocked();
+  if (held.locked && held.pid !== process.pid) {
+    const err = new Error(
+      `Another wu process (PID ${held.pid}) holds the WhatsApp session and is not serving requests over IPC. Stop it, or run \`wu daemon\`, which handles this on its existing connection.`
+    );
+    // 4 = connection failed, matching what the lock-failure paths in `listen`
+    // and `daemon` exit with (see cli/exit-codes.ts; core does not import cli).
+    (err as Error & { exitCode: number }).exitCode = 4;
+    throw err;
   }
 
   const { sock, flushCreds } = await createConnection({ quiet: opts?.quiet });

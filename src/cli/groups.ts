@@ -1,15 +1,7 @@
 import { Command } from "commander";
-import { withConnection as _withConnection } from "../core/connection.js";
-import {
-  fetchGroupMetadata,
-  refreshGroupMetadata,
-  createGroup,
-  getInviteCode,
-  leaveGroup,
-  renameGroup,
-  joinGroupByInvite,
-} from "../core/groups.js";
-import { daemonIpcAvailable, daemonRequest } from "../core/ipc.js";
+import { withConnection } from "../core/connection.js";
+import { fetchGroupMetadata, refreshGroupMetadata } from "../core/groups.js";
+import { daemonIpcAvailable, daemonRequest, runAction } from "../core/ipc.js";
 import {
   getGroupParticipants,
   type ChatRow,
@@ -75,11 +67,6 @@ function renderGroupTree(groups: ChatRow[], config: WuConfig): string[] {
   return lines;
 }
 
-/** All group CLI commands use quiet connections (no pino noise) */
-function withConnection<T>(fn: (sock: import("@whiskeysockets/baileys").WASocket) => Promise<T>) {
-  return _withConnection(fn, { quiet: true });
-}
-
 export function registerGroupsCommand(program: Command): void {
   const groups = program
     .command("groups")
@@ -110,10 +97,7 @@ export function registerGroupsCommand(program: Command): void {
             if (await daemonIpcAvailable()) {
               await daemonRequest("groups.refresh", {});
             } else {
-              await _withConnection((sock) => refreshGroupMetadata(sock, config), {
-                quiet: true,
-                requireExclusive: true,
-              });
+              await withConnection((sock) => refreshGroupMetadata(sock, config), { quiet: true });
             }
           } catch (err) {
             console.error("Failed to fetch groups:", (err as Error).message);
@@ -195,9 +179,9 @@ export function registerGroupsCommand(program: Command): void {
           // Prefer the daemon's socket over a competing login (see groups list).
           const meta: LiveMeta = (await daemonIpcAvailable())
             ? await daemonRequest<LiveMeta>("groups.metadata", { jid })
-            : await _withConnection(
+            : await withConnection(
                 (sock) => fetchGroupMetadata(sock, jid) as Promise<LiveMeta>,
-                { quiet: true, requireExclusive: true }
+                { quiet: true }
               );
           outputResult(
             {
@@ -250,22 +234,17 @@ export function registerGroupsCommand(program: Command): void {
     .action(async (name: string, participants: string[], opts: { json?: boolean }) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          const result = await createGroup(sock, name, participants, config);
-          if (opts.json) {
-            outputResult(
-              {
-                id: result.id,
-                name: result.subject,
-                participant_count: result.participants?.length ?? participants.length,
-              },
-              { json: true }
-            );
-          } else {
-            console.log(`Group created: ${result.id}`);
-            console.log(`Name: ${result.subject}`);
-          }
-        });
+        const result = await runAction<{ id: string; name: string; participant_count: number }>(
+          "groups.create",
+          { name, participants },
+          config
+        );
+        if (opts.json) {
+          outputResult(result, { json: true });
+        } else {
+          console.log(`Group created: ${result.id}`);
+          console.log(`Name: ${result.name}`);
+        }
       } catch (err) {
         console.error((err as Error).message);
         process.exit(EXIT_GENERAL_ERROR);
@@ -278,10 +257,8 @@ export function registerGroupsCommand(program: Command): void {
     .action(async (jid: string) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          const code = await getInviteCode(sock, jid, config);
-          console.log(`https://chat.whatsapp.com/${code}`);
-        });
+        const { link } = await runAction<{ link: string }>("groups.invite", { jid }, config);
+        console.log(link);
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);
@@ -295,10 +272,8 @@ export function registerGroupsCommand(program: Command): void {
     .action(async (jid: string) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          await leaveGroup(sock, jid, config);
-          console.log(`Left group: ${jid}`);
-        });
+        await runAction("groups.leave", { jid }, config);
+        console.log(`Left group: ${jid}`);
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);
@@ -332,10 +307,8 @@ export function registerGroupsCommand(program: Command): void {
     .action(async (jid: string, name: string) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          await renameGroup(sock, jid, name, config);
-          console.log(`Renamed group ${jid} to: ${name}`);
-        });
+        await runAction("groups.rename", { jid, name }, config);
+        console.log(`Renamed group ${jid} to: ${name}`);
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);
@@ -348,10 +321,12 @@ export function registerGroupsCommand(program: Command): void {
     .description("Join a group by invite code or URL")
     .action(async (codeOrUrl: string) => {
       try {
-        await withConnection(async (sock) => {
-          const jid = await joinGroupByInvite(sock, codeOrUrl);
-          console.log(`Joined group: ${jid || "(unknown JID)"}`);
-        });
+        const { jid } = await runAction<{ jid: string | null }>(
+          "groups.join",
+          { code: codeOrUrl },
+          loadConfig()
+        );
+        console.log(`Joined group: ${jid || "(unknown JID)"}`);
       } catch (err) {
         console.error((err as Error).message);
         process.exit(EXIT_GENERAL_ERROR);

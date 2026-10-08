@@ -1,6 +1,6 @@
 import { Command } from "commander";
-import { withConnection } from "../core/connection.js";
-import { sendText, sendMedia, sendReaction, sendPoll, deleteForEveryone } from "../core/sender.js";
+import { runAction } from "../core/ipc.js";
+import { absoluteMediaPath, type SendResult } from "../core/actions.js";
 import { listMessagesForConfig, searchMessagesForConfig } from "../core/service.js";
 import { importMessagesJsonl } from "../core/import.js";
 import { exportMessages } from "../core/export.js";
@@ -133,44 +133,25 @@ export function registerMessagesCommand(program: Command): void {
         const config = loadConfig();
 
         try {
-          await withConnection(async (sock) => {
-            let result;
+          const result = await runAction<SendResult>(
+            "messages.send",
+            {
+              to: jid,
+              text,
+              media: absoluteMediaPath(opts.media),
+              caption: opts.caption,
+              replyTo: opts.replyTo,
+              poll: opts.poll,
+              options: opts.poll ? (opts.options || "").split(",") : undefined,
+            },
+            config
+          );
 
-            if (opts.poll) {
-              const pollOptions = (opts.options || "")
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
-              if (pollOptions.length < 2) {
-                console.error("Polls require at least 2 options");
-                process.exit(EXIT_GENERAL_ERROR);
-              }
-              result = await sendPoll(sock, jid, opts.poll, pollOptions, config);
-            } else if (opts.media) {
-              result = await sendMedia(sock, jid, opts.media, config, {
-                caption: opts.caption || text,
-                replyTo: opts.replyTo,
-              });
-            } else if (text) {
-              result = await sendText(sock, jid, text, config, {
-                replyTo: opts.replyTo,
-              });
-            } else {
-              console.error("Provide text, --media, or --poll");
-              process.exit(EXIT_GENERAL_ERROR);
-            }
-
-            if (opts.json) {
-              console.log(
-                JSON.stringify({
-                  id: result?.key?.id,
-                  timestamp: result?.messageTimestamp,
-                })
-              );
-            } else {
-              console.log(`Sent: ${result?.key?.id}`);
-            }
-          });
+          if (opts.json) {
+            console.log(JSON.stringify(result));
+          } else {
+            console.log(`Sent: ${result.id}`);
+          }
         } catch (err) {
           const error = err as Error & { exitCode?: number };
           console.error(error.message);
@@ -185,10 +166,8 @@ export function registerMessagesCommand(program: Command): void {
     .action(async (jid: string, msgId: string, emoji: string) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          await sendReaction(sock, jid, msgId, emoji, config);
-          console.log(emoji ? `Reacted with ${emoji}` : "Reaction removed");
-        });
+        await runAction("messages.react", { jid, msgId, emoji }, config);
+        console.log(emoji ? `Reacted with ${emoji}` : "Reaction removed");
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);
@@ -199,13 +178,12 @@ export function registerMessagesCommand(program: Command): void {
   messages
     .command("delete <jid> <msg-id>")
     .description("Delete a message for everyone")
-    .action(async (jid: string, msgId: string) => {
+    .option("--from-me", "The message is yours (use when it is missing from the local store)")
+    .action(async (jid: string, msgId: string, opts: { fromMe?: boolean }) => {
       const config = loadConfig();
       try {
-        await withConnection(async (sock) => {
-          await deleteForEveryone(sock, jid, msgId, config);
-          console.log(`Deleted: ${msgId}`);
-        });
+        await runAction("messages.delete", { jid, msgId, fromMe: opts.fromMe }, config);
+        console.log(`Deleted: ${msgId}`);
       } catch (err) {
         const error = err as Error & { exitCode?: number };
         console.error(error.message);

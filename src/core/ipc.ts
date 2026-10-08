@@ -7,13 +7,16 @@ import { downloadMedia, downloadMediaBatch } from "./media.js";
 import { backfillHistory } from "./backfill.js";
 import { refreshGroupMetadata, fetchGroupMetadata } from "./groups.js";
 import { collectUndownloadedMedia } from "./export.js";
+import { actions, isAction, type ActionName } from "./actions.js";
+import { withConnection } from "./connection.js";
 import { createChildLogger } from "../config/logger.js";
 
 const logger = createChildLogger("ipc");
 
 // Newline-delimited JSON request/response over a unix domain socket. The
 // daemon owns the only live WhatsApp socket, so anything that needs the socket
-// (media download) routes here instead of opening a competing login.
+// (media download, sends, group changes) routes here instead of opening a
+// competing login.
 
 interface IpcRequest {
   id: number;
@@ -26,6 +29,9 @@ interface IpcResponse {
   ok: boolean;
   result?: unknown;
   error?: string;
+  // Carried over so a CLI command exits with the same code whether the daemon
+  // or a one-shot login ran it (2 = blocked by constraints).
+  exitCode?: number;
 }
 
 // --- Server (runs inside the daemon) ---
@@ -94,7 +100,8 @@ async function handleLine(
     const result = await dispatch(req, getSock, getConfig);
     respond({ ok: true, result });
   } catch (err) {
-    respond({ ok: false, error: (err as Error).message });
+    const exitCode = (err as Error & { exitCode?: number }).exitCode;
+    respond({ ok: false, error: (err as Error).message, ...(exitCode ? { exitCode } : {}) });
   }
 }
 
@@ -113,6 +120,10 @@ async function dispatch(
     if (!sock) throw new Error("Daemon is not connected to WhatsApp");
     return sock;
   };
+
+  if (isAction(req.method)) {
+    return actions[req.method](requireSock(), config, params);
+  }
 
   switch (req.method) {
     case "media.download": {
@@ -183,6 +194,20 @@ export function daemonIpcAvailable(
   });
 }
 
+// A daemon started before an upgrade keeps running the old code, so it answers
+// but does not know the method. Say how to fix that rather than passing on the
+// bare protocol error.
+function daemonError(method: string, res: IpcResponse): Error {
+  const msg = res.error || "Daemon request failed";
+  const err = msg === `Unknown IPC method: ${method}`
+    ? new Error(
+        `The running daemon predates \`${method}\` over IPC. Restart it so it loads the installed version (e.g. \`systemctl --user restart wu\`), then retry.`
+      )
+    : new Error(msg);
+  if (res.exitCode) (err as Error & { exitCode: number }).exitCode = res.exitCode;
+  return err;
+}
+
 export function daemonRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> = {},
@@ -216,7 +241,7 @@ export function daemonRequest<T = unknown>(
       try {
         const res = JSON.parse(buffer.slice(0, nl)) as IpcResponse;
         if (res.ok) finish(null, res.result as T);
-        else finish(new Error(res.error || "Daemon request failed"));
+        else finish(daemonError(method, res));
       } catch (err) {
         finish(err as Error);
       }
@@ -227,4 +252,26 @@ export function daemonRequest<T = unknown>(
       finish(new Error("Daemon closed the connection before responding"));
     });
   });
+}
+
+// Run a socket action on the daemon's connection when a daemon is serving, and
+// only otherwise open a one-shot login. The one-shot path refuses to start while
+// another process holds the session: a second login replaces the daemon's
+// socket (WhatsApp closes it with 440), the daemon reconnects five seconds later
+// and replaces this one in turn, so the action can go out on the wire and still
+// come back as "connection closed", which invites a duplicate retry.
+export async function runAction<T>(
+  method: ActionName,
+  params: Record<string, unknown>,
+  config: WuConfig,
+  opts?: { quiet?: boolean; sockPath?: string }
+): Promise<T> {
+  const sockPath = opts?.sockPath ?? DAEMON_SOCK_PATH;
+  if (await daemonIpcAvailable(1000, sockPath)) {
+    return daemonRequest<T>(method, params, 300_000, sockPath);
+  }
+  return withConnection(
+    (sock) => actions[method](sock, config, params) as Promise<T>,
+    { quiet: opts?.quiet ?? true }
+  );
 }

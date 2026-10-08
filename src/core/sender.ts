@@ -155,14 +155,17 @@ export async function deleteForEveryone(
   sock: WASocket,
   jid: string,
   msgId: string,
-  config: WuConfig
+  config: WuConfig,
+  opts?: { fromMe?: boolean }
 ): Promise<WAMessage | undefined> {
   assertCanSend(jid, config);
   await rateLimit(config);
 
-  // Read stored message to get correct fromMe value
+  // Read stored message to get correct fromMe value. A message missing from
+  // the store (sent while collection was down) needs the caller to say whose
+  // it is, or the revoke goes out for someone else's message and does nothing.
   const stored = getMessage(msgId);
-  const fromMe = stored ? stored.is_from_me === 1 : false;
+  const fromMe = opts?.fromMe ?? (stored ? stored.is_from_me === 1 : false);
 
   const key = {
     remoteJid: jid,
